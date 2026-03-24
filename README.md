@@ -1,5 +1,7 @@
 # StackAlert Lambda
 
+[![CI](https://github.com/stackalertapp/stackalert-lambda/actions/workflows/ci.yml/badge.svg)](https://github.com/stackalertapp/stackalert-lambda/actions/workflows/ci.yml)
+
 AWS cost spike detection Lambda written in Rust. Monitors your AWS spending and alerts you via Telegram when costs spike unexpectedly.
 
 **Perfect for:**
