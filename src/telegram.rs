@@ -1,9 +1,22 @@
 use crate::anomaly::Spike;
 use crate::cost_explorer::SpendHistory;
 use anyhow::{Context, Result};
+use once_cell::sync::Lazy;
+use reqwest::Client;
+use std::time::Duration;
 use tracing::{info, warn};
 
 const TELEGRAM_API: &str = "https://api.telegram.org";
+
+/// Module-level HTTP client — reused across Lambda warm invocations.
+/// Avoids TCP connection setup overhead on every check.
+static HTTP_CLIENT: Lazy<Client> = Lazy::new(|| {
+    Client::builder()
+        .timeout(Duration::from_secs(10))
+        .connect_timeout(Duration::from_secs(5))
+        .build()
+        .expect("Failed to build HTTP client")
+});
 
 /// Send a Telegram alert when cost spikes are detected.
 /// Returns true if the message was sent successfully.
@@ -29,8 +42,7 @@ pub async fn send_daily_digest(
 async fn send_message(bot_token: &str, chat_id: &str, text: &str) -> Result<bool> {
     let url = format!("{TELEGRAM_API}/bot{bot_token}/sendMessage");
 
-    let client = reqwest::Client::new();
-    let resp = client
+    let resp = HTTP_CLIENT
         .post(&url)
         .json(&serde_json::json!({
             "chat_id": chat_id,
@@ -48,7 +60,9 @@ async fn send_message(bot_token: &str, chat_id: &str, text: &str) -> Result<bool
     } else {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        warn!(%status, %body, "Telegram API returned non-2xx");
+        warn!(%status, "Telegram API returned non-2xx");
+        // Don't log body — may contain sensitive token info in error messages
+        let _ = body;
         Ok(false)
     }
 }
@@ -59,7 +73,6 @@ fn build_spike_message(spikes: &[Spike]) -> String {
 
     let mut msg = String::from("⚠️ <b>AWS Cost Spike Detected</b>\n\n");
 
-    // Summary
     let pct_str = if top_spike.pct_increase.is_infinite() {
         "NEW".to_string()
     } else {
@@ -74,7 +87,6 @@ fn build_spike_message(spikes: &[Spike]) -> String {
     ));
     msg.push_str(&format!("💰 Total extra spend: ~${:.2}\n\n", total_extra));
 
-    // Service breakdown
     msg.push_str("<b>Affected services:</b>\n");
     for spike in spikes.iter().take(5) {
         let pct = if spike.pct_increase.is_infinite() {
@@ -105,7 +117,6 @@ fn build_spike_message(spikes: &[Spike]) -> String {
 fn build_digest_message(spend_data: &SpendHistory) -> String {
     let mut msg = String::from("📊 <b>Daily AWS Cost Digest</b>\n\n");
 
-    // Calculate totals per service (sum of all days)
     let mut services: Vec<(String, f64, f64)> = spend_data
         .iter()
         .map(|(service, costs)| {
@@ -117,10 +128,9 @@ fn build_digest_message(spend_data: &SpendHistory) -> String {
             };
             (service.clone(), avg, total)
         })
-        .filter(|(_, avg, _)| *avg >= 0.10) // Skip noise
+        .filter(|(_, avg, _)| *avg >= 0.10)
         .collect();
 
-    // Sort by average daily cost descending
     services.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
 
     let grand_total_daily: f64 = services.iter().map(|(_, avg, _)| avg).sum();
@@ -219,7 +229,7 @@ mod tests {
         spend_data.insert("Amazon EC2".to_string(), vec![18.0, 19.0, 17.5]);
         spend_data.insert(
             "AWS Tax".to_string(),
-            vec![0.01, 0.02, 0.01], // avg $0.013 — below $0.10 threshold
+            vec![0.01, 0.02, 0.01],
         );
         let msg = build_digest_message(&spend_data);
         assert!(msg.contains("Amazon EC2"));

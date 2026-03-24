@@ -41,12 +41,20 @@ async fn main() -> Result<(), Error> {
 
 async fn handler(event: LambdaEvent<SchedulerEvent>) -> Result<Response, Error> {
     let (payload, ctx) = event.into_parts();
-    let mode = payload.mode.unwrap_or_else(|| "spike".to_string());
+    let mode = payload.mode.as_deref().unwrap_or("spike");
     info!(request_id = %ctx.request_id, %mode, "StackAlert check started");
+
+    // Strict mode validation — reject unknown modes immediately
+    match mode {
+        "spike" | "digest" => {}
+        unknown => {
+            return Err(anyhow::anyhow!("Unknown mode: '{}'. Expected 'spike' or 'digest'.", unknown).into());
+        }
+    }
 
     let cfg = config::Config::load().await?;
 
-    let result = match mode.as_str() {
+    let result = match mode {
         "digest" => run_digest(&cfg).await?,
         _ => run_spike_check(&cfg).await?,
     };
@@ -63,20 +71,16 @@ async fn handler(event: LambdaEvent<SchedulerEvent>) -> Result<Response, Error> 
 
 async fn run_spike_check(cfg: &config::Config) -> Result<Response> {
     let aws_cfg = cost_explorer::build_aws_config(cfg).await?;
-
-    // Fetch today + 7-day history per service
     let spend_data = cost_explorer::fetch_spend(&aws_cfg, 8).await?;
-
-    // Detect spikes vs 7-day rolling average
     let spikes = anomaly::detect_spikes(&spend_data, cfg.spike_threshold_pct);
 
     let mut alerts_sent = 0;
     if !spikes.is_empty() {
-        let sent =
-            telegram::send_spike_alert(&cfg.telegram_bot_token, &cfg.telegram_chat_id, &spikes)
-                .await?;
-        if sent {
-            alerts_sent = 1;
+        // Graceful degradation: Telegram failure doesn't abort the cost check
+        match telegram::send_spike_alert(&cfg.telegram_bot_token, &cfg.telegram_chat_id, &spikes).await {
+            Ok(true) => alerts_sent = 1,
+            Ok(false) => tracing::warn!("Telegram message not sent (API returned non-2xx)"),
+            Err(e) => tracing::warn!(error = %e, "Telegram send failed — continuing"),
         }
     } else {
         info!("No spikes detected");
@@ -91,16 +95,20 @@ async fn run_spike_check(cfg: &config::Config) -> Result<Response> {
 
 async fn run_digest(cfg: &config::Config) -> Result<Response> {
     let aws_cfg = cost_explorer::build_aws_config(cfg).await?;
-
-    // Fetch 7-day history
     let spend_data = cost_explorer::fetch_spend(&aws_cfg, 7).await?;
 
-    telegram::send_daily_digest(&cfg.telegram_bot_token, &cfg.telegram_chat_id, &spend_data)
-        .await?;
+    // Graceful degradation: log Telegram failures but return success
+    let alerts_sent = match telegram::send_daily_digest(&cfg.telegram_bot_token, &cfg.telegram_chat_id, &spend_data).await {
+        Ok(sent) => sent as usize,
+        Err(e) => {
+            tracing::warn!(error = %e, "Telegram digest send failed — continuing");
+            0
+        }
+    };
 
     Ok(Response {
         mode: "digest".to_string(),
         spikes_found: 0,
-        alerts_sent: 1,
+        alerts_sent,
     })
 }
