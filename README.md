@@ -15,6 +15,43 @@ EventBridge (daily 8:00 UTC) → Lambda → Cost Explorer API → Daily Digest �
 
 The Lambda queries AWS Cost Explorer for daily spend grouped by service, compares today's spend against a 7-day rolling average, and sends a Telegram alert if any service exceeds the configured threshold (default: 50% above average).
 
+## What You Get: Per-Service Alerts
+
+StackAlert monitors each AWS service **independently** — so you know exactly what spiked, not just that your bill went up.
+
+**Spike alert example (Telegram):**
+```
+⚠️ Cost Spike Detected
+
+🔴 Amazon Bedrock    $0.80 → $8.20   (+925%)
+🔴 Amazon EC2        $12.00 → $18.50  (+54%)
+✅ Amazon S3         $0.42             (stable)
+✅ AWS Lambda        $0.01             (stable)
+```
+
+**Daily digest example:**
+```
+📊 Daily AWS Cost Digest — Mon 23 Mar
+
+Amazon Bedrock    $8.20
+Amazon EC2       $18.50
+Amazon S3         $0.42
+AWS Lambda        $0.01
+──────────────────────
+Total            $27.13
+```
+
+### Why this matters vs AWS native tools
+
+| Tool | What it tells you | Delivery | Cost |
+|---|---|---|---|
+| **StackAlert** | Which service + by how much | Telegram (instant push) | ~$0/mo |
+| AWS Budgets | Total bill crossed threshold | Email | Free |
+| Cost Anomaly Detection | Something looks unusual (ML) | Email | Free |
+| CloudZero / nOps | Everything | Slack/email | $500+/mo |
+
+AWS Budgets fires when you've already overspent. Cost Anomaly Detection needs 2–4 weeks of ML training. StackAlert fires on day 1 with a 50% default threshold, tells you the service by name, and lands in Telegram.
+
 ## Features
 
 - **Spike Detection**: Alerts when any service's daily cost exceeds the 7-day average by a configurable threshold
