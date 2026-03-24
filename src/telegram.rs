@@ -227,10 +227,7 @@ mod tests {
     fn test_digest_filters_noise() {
         let mut spend_data = HashMap::new();
         spend_data.insert("Amazon EC2".to_string(), vec![18.0, 19.0, 17.5]);
-        spend_data.insert(
-            "AWS Tax".to_string(),
-            vec![0.01, 0.02, 0.01],
-        );
+        spend_data.insert("AWS Tax".to_string(), vec![0.01, 0.02, 0.01]);
         let msg = build_digest_message(&spend_data);
         assert!(msg.contains("Amazon EC2"));
         assert!(!msg.contains("AWS Tax"));

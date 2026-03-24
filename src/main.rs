@@ -48,7 +48,11 @@ async fn handler(event: LambdaEvent<SchedulerEvent>) -> Result<Response, Error> 
     match mode {
         "spike" | "digest" => {}
         unknown => {
-            return Err(anyhow::anyhow!("Unknown mode: '{}'. Expected 'spike' or 'digest'.", unknown).into());
+            return Err(anyhow::anyhow!(
+                "Unknown mode: '{}'. Expected 'spike' or 'digest'.",
+                unknown
+            )
+            .into());
         }
     }
 
@@ -77,7 +81,9 @@ async fn run_spike_check(cfg: &config::Config) -> Result<Response> {
     let mut alerts_sent = 0;
     if !spikes.is_empty() {
         // Graceful degradation: Telegram failure doesn't abort the cost check
-        match telegram::send_spike_alert(&cfg.telegram_bot_token, &cfg.telegram_chat_id, &spikes).await {
+        match telegram::send_spike_alert(&cfg.telegram_bot_token, &cfg.telegram_chat_id, &spikes)
+            .await
+        {
             Ok(true) => alerts_sent = 1,
             Ok(false) => tracing::warn!("Telegram message not sent (API returned non-2xx)"),
             Err(e) => tracing::warn!(error = %e, "Telegram send failed — continuing"),
@@ -98,7 +104,13 @@ async fn run_digest(cfg: &config::Config) -> Result<Response> {
     let spend_data = cost_explorer::fetch_spend(&aws_cfg, 7).await?;
 
     // Graceful degradation: log Telegram failures but return success
-    let alerts_sent = match telegram::send_daily_digest(&cfg.telegram_bot_token, &cfg.telegram_chat_id, &spend_data).await {
+    let alerts_sent = match telegram::send_daily_digest(
+        &cfg.telegram_bot_token,
+        &cfg.telegram_chat_id,
+        &spend_data,
+    )
+    .await
+    {
         Ok(sent) => sent as usize,
         Err(e) => {
             tracing::warn!(error = %e, "Telegram digest send failed — continuing");
