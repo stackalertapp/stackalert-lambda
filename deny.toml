@@ -36,9 +36,6 @@ deny = [
   "LGPL-3.0",
   "AGPL-3.0",
 ]
-copyleft = "deny"
-allow-osi-fsf-free = "neither"
-default = "deny"
 confidence-threshold = 0.8
 
 # ── Bans ──────────────────────────────────────────────────────────────────────

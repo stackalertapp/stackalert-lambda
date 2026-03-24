@@ -1,3 +1,4 @@
+mod accounts;
 mod anomaly;
 mod config;
 mod cost_explorer;
@@ -8,17 +9,22 @@ use lambda_runtime::{run, service_fn, tracing, Error, LambdaEvent};
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
-/// EventBridge sends a payload with the mode field, or empty for spike check
+use accounts::AccountContext;
+
+/// Event payload from EventBridge (single-account) or Step Functions (per-account).
 #[derive(Deserialize, Default)]
 struct SchedulerEvent {
     /// "spike" (default) or "digest"
     #[serde(default)]
     mode: Option<String>,
+
+    /// Populated by the dashboard's Step Functions Map state for multi-account mode.
+    /// Absent in single-account / open-source mode — config is read from env vars instead.
+    account: Option<AccountContext>,
 }
 
-/// Lambda response
 #[derive(Serialize)]
-struct Response {
+struct CheckResponse {
     mode: String,
     spikes_found: usize,
     alerts_sent: usize,
@@ -39,28 +45,21 @@ async fn main() -> Result<(), Error> {
     run(service_fn(handler)).await
 }
 
-async fn handler(event: LambdaEvent<SchedulerEvent>) -> Result<Response, Error> {
+async fn handler(event: LambdaEvent<SchedulerEvent>) -> Result<CheckResponse, Error> {
     let (payload, ctx) = event.into_parts();
     let mode = payload.mode.as_deref().unwrap_or("spike");
-    info!(request_id = %ctx.request_id, %mode, "StackAlert check started");
+    info!(request_id = %ctx.request_id, %mode, "StackAlert invocation started");
 
-    // Strict mode validation — reject unknown modes immediately
-    match mode {
-        "spike" | "digest" => {}
-        unknown => {
-            return Err(anyhow::anyhow!(
-                "Unknown mode: '{}'. Expected 'spike' or 'digest'.",
-                unknown
-            )
-            .into());
-        }
-    }
-
-    let cfg = config::Config::load().await?;
+    let cfg = match &payload.account {
+        // Multi-account: context injected by the dashboard's Step Functions
+        Some(account_ctx) => config::Config::from_account_context(account_ctx).await?,
+        // Single-account: read from env vars (open-source / self-hosted)
+        None => config::Config::load().await?,
+    };
 
     let result = match mode {
         "digest" => run_digest(&cfg).await?,
-        _ => run_spike_check(&cfg).await?,
+        "spike" | _ => run_spike_check(&cfg).await?,
     };
 
     info!(
@@ -73,14 +72,13 @@ async fn handler(event: LambdaEvent<SchedulerEvent>) -> Result<Response, Error> 
     Ok(result)
 }
 
-async fn run_spike_check(cfg: &config::Config) -> Result<Response> {
+async fn run_spike_check(cfg: &config::Config) -> Result<CheckResponse> {
     let aws_cfg = cost_explorer::build_aws_config(cfg).await?;
     let spend_data = cost_explorer::fetch_spend(&aws_cfg, 8).await?;
     let spikes = anomaly::detect_spikes(&spend_data, cfg.spike_threshold_pct);
 
     let mut alerts_sent = 0;
     if !spikes.is_empty() {
-        // Graceful degradation: Telegram failure doesn't abort the cost check
         match telegram::send_spike_alert(&cfg.telegram_bot_token, &cfg.telegram_chat_id, &spikes)
             .await
         {
@@ -92,18 +90,17 @@ async fn run_spike_check(cfg: &config::Config) -> Result<Response> {
         info!("No spikes detected");
     }
 
-    Ok(Response {
+    Ok(CheckResponse {
         mode: "spike".to_string(),
         spikes_found: spikes.len(),
         alerts_sent,
     })
 }
 
-async fn run_digest(cfg: &config::Config) -> Result<Response> {
+async fn run_digest(cfg: &config::Config) -> Result<CheckResponse> {
     let aws_cfg = cost_explorer::build_aws_config(cfg).await?;
     let spend_data = cost_explorer::fetch_spend(&aws_cfg, 7).await?;
 
-    // Graceful degradation: log Telegram failures but return success
     let alerts_sent = match telegram::send_daily_digest(
         &cfg.telegram_bot_token,
         &cfg.telegram_chat_id,
@@ -118,7 +115,7 @@ async fn run_digest(cfg: &config::Config) -> Result<Response> {
         }
     };
 
-    Ok(Response {
+    Ok(CheckResponse {
         mode: "digest".to_string(),
         spikes_found: 0,
         alerts_sent,

@@ -24,7 +24,13 @@ pub async fn build_aws_config(cfg: &Config) -> Result<SdkConfig> {
     match &cfg.cross_account_role_arn {
         Some(role_arn) => {
             info!(%role_arn, "Using cross-account mode");
-            assume_role(&base_cfg, role_arn, "stackalert-check").await
+            assume_role(
+                &base_cfg,
+                role_arn,
+                "stackalert-check",
+                cfg.external_id.as_deref(),
+            )
+            .await
         }
         None => {
             info!("Using single-account mode (Lambda's own credentials)");
@@ -44,14 +50,21 @@ async fn assume_role(
     base_cfg: &SdkConfig,
     role_arn: &str,
     session_name: &str,
+    external_id: Option<&str>,
 ) -> Result<SdkConfig> {
     let sts = aws_sdk_sts::Client::new(base_cfg);
 
-    let resp = sts
+    let mut req = sts
         .assume_role()
         .role_arn(role_arn)
         .role_session_name(session_name)
-        .duration_seconds(900)
+        .duration_seconds(900);
+
+    if let Some(eid) = external_id {
+        req = req.external_id(eid);
+    }
+
+    let resp = req
         .send()
         .await
         .with_context(|| format!("Failed to assume role: {role_arn}"))?;
