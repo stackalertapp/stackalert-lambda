@@ -42,11 +42,10 @@ pub fn detect_spikes(history: &SpendHistory, threshold_pct: f64) -> Vec<Spike> {
         let non_zero: Vec<f64> = window.iter().copied().filter(|&v| v > 0.01).collect();
 
         if non_zero.is_empty() {
-            // Service appeared for the first time in the window — flag as new spend.
-            // Threshold: $0.25/day catches real new usage (e.g. an EC2 instance running
-            // a few hours) while ignoring sub-cent noise from new AWS services appearing
-            // with trivial amounts.
-            if today > 0.25 {
+            // Service appeared for the first time in the window — flag any cost as a spike.
+            // Sub-cent amounts are already filtered out by fetch_spend (amount < 0.01),
+            // so any value reaching here is real spend on a previously unseen service.
+            if today > 0.0 {
                 spikes.push(Spike {
                     service: service.clone(),
                     avg_daily: 0.0,
@@ -126,19 +125,18 @@ mod tests {
 
     #[test]
     fn test_new_service_partial_day_flagged() {
-        // EC2 started partway through the day — $0.50 is below old $1.0 threshold
-        // but should still alert (above new $0.25 threshold)
+        // EC2 started partway through the day — any cost from a new service is flagged
         let history = make_history(vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.50]);
         let spikes = detect_spikes(&history, 50.0);
         assert_eq!(spikes.len(), 1);
     }
 
     #[test]
-    fn test_new_service_noise_ignored() {
-        // Sub-$0.25 new service (e.g. CloudTrail or Config logging a few cents)
+    fn test_new_service_small_cost_flagged() {
+        // EC2 started late in the day — even $0.10 is real spend and should alert
         let history = make_history(vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.10]);
         let spikes = detect_spikes(&history, 50.0);
-        assert!(spikes.is_empty());
+        assert_eq!(spikes.len(), 1);
     }
 
     #[test]
