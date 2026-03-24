@@ -1,0 +1,53 @@
+[package]
+name = "stackalert-lambda"
+version = "0.1.0"
+edition = "2021"
+description = "StackAlert — AWS cost spike detection Lambda (Rust)"
+license = "Apache-2.0"
+repository = "https://github.com/stackalertapp/stackalert-lambda"
+
+[[bin]]
+name = "bootstrap"
+path = "src/main.rs"
+
+[dependencies]
+# AWS Lambda runtime
+lambda_runtime = "0.13"
+
+# AWS SDK
+aws-config = { version = "1", features = ["behavior-version-latest"] }
+aws-sdk-costexplorer = "1"
+aws-sdk-ssm = "1"
+aws-sdk-sts = "1"
+aws-credential-types = { version = "1", features = ["hardcoded-credentials"] }
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# HTTP client for Telegram API
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Error handling
+anyhow = "1"
+thiserror = "1"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+[dev-dependencies]
+tokio-test = "0.4"
+
+[profile.release]
+opt-level = "z"      # Optimize for size → smaller cold start
+lto = true           # Link-time optimization
+codegen-units = 1    # Better optimization
+strip = true         # Strip debug symbols → smaller binary
+panic = "abort"      # Smaller binary, faster
