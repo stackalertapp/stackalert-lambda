@@ -2,6 +2,7 @@ mod accounts;
 mod anomaly;
 mod config;
 mod cost_explorer;
+mod dedup;
 mod telegram;
 
 use anyhow::Result;
@@ -73,26 +74,55 @@ async fn handler(event: LambdaEvent<SchedulerEvent>) -> Result<CheckResponse, Er
 }
 
 async fn run_spike_check(cfg: &config::Config) -> Result<CheckResponse> {
+    // Cost Explorer uses cross-account credentials (or Lambda's own in single-account mode).
     let aws_cfg = cost_explorer::build_aws_config(cfg).await?;
     let spend_data = cost_explorer::fetch_spend(&aws_cfg, 8).await?;
-    let spikes = anomaly::detect_spikes(&spend_data, cfg.spike_threshold_pct);
+    let all_spikes = anomaly::detect_spikes(&spend_data, cfg.spike_threshold_pct);
+
+    // Dedup uses the Lambda's own credentials — SSM state lives in the Lambda's account,
+    // not in the customer account, so it works for both single and multi-account modes.
+    let base_cfg = aws_config::load_from_env().await;
+    let ssm = aws_sdk_ssm::Client::new(&base_cfg);
+
+    // Filter out services that were already alerted within the cooldown window (6h).
+    // Each service has an independent cooldown — a new spike on Service B is never
+    // suppressed by an ongoing alert on Service A.
+    let spikes_found = all_spikes.len();
+    let new_spikes = dedup::filter_new_spikes(&ssm, all_spikes, &cfg.account_namespace).await;
+
+    info!(
+        spikes_found,
+        new_after_dedup = new_spikes.len(),
+        namespace = %cfg.account_namespace,
+        "Dedup complete"
+    );
 
     let mut alerts_sent = 0;
-    if !spikes.is_empty() {
-        match telegram::send_spike_alert(&cfg.telegram_bot_token, &cfg.telegram_chat_id, &spikes)
-            .await
+    if !new_spikes.is_empty() {
+        match telegram::send_spike_alert(
+            &cfg.telegram_bot_token,
+            &cfg.telegram_chat_id,
+            &new_spikes,
+        )
+        .await
         {
-            Ok(true) => alerts_sent = 1,
+            Ok(true) => {
+                alerts_sent = 1;
+                // Record the alert time so we don't re-alert within the cooldown window.
+                dedup::mark_alerted(&ssm, &new_spikes, &cfg.account_namespace).await;
+            }
             Ok(false) => tracing::warn!("Telegram message not sent (API returned non-2xx)"),
             Err(e) => tracing::warn!(error = %e, "Telegram send failed — continuing"),
         }
+    } else if spikes_found > 0 {
+        info!(spikes_found, "All spikes suppressed by dedup — no alert sent");
     } else {
         info!("No spikes detected");
     }
 
     Ok(CheckResponse {
         mode: "spike".to_string(),
-        spikes_found: spikes.len(),
+        spikes_found,
         alerts_sent,
     })
 }

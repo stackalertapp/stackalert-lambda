@@ -20,6 +20,15 @@ pub struct Config {
 
     /// ExternalId for confused-deputy protection when assuming the cross-account role.
     pub external_id: Option<String>,
+
+    /// Namespace for SSM-based alert deduplication keys.
+    ///
+    /// - Single-account (open-source / self-hosted): `"self"`
+    /// - Multi-account (SaaS): the customer's AWS account ID (e.g. `"700483457242"`)
+    ///
+    /// This isolates dedup state so the same service spiking in two different
+    /// customer accounts results in two independent alerts.
+    pub account_namespace: String,
 }
 
 impl Config {
@@ -51,6 +60,7 @@ impl Config {
             spike_threshold_pct,
             cross_account_role_arn,
             external_id,
+            account_namespace: "self".to_string(),
         })
     }
 
@@ -78,6 +88,7 @@ impl Config {
             spike_threshold_pct: ctx.spike_threshold,
             cross_account_role_arn: Some(ctx.role_arn.clone()),
             external_id: Some(ctx.external_id.clone()),
+            account_namespace: ctx.aws_account_id.clone(),
         })
     }
 
