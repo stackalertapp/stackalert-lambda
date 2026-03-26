@@ -59,7 +59,10 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-unknown-linux-musl
+          # Lambda AL2023 uses glibc — use gnu target, not musl.
+          # aws-lc-sys (the TLS backend) references glibc symbols and cannot
+          # link against musl libc.
+          targets: aarch64-unknown-linux-gnu
 
       - uses: Swatinem/rust-cache@v2
 
@@ -68,15 +71,15 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu
 
-      - name: Build release binary (arm64 musl)
+      - name: Build release binary (arm64 glibc)
         env:
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: aarch64-linux-gnu-gcc
-        run: cargo build --release --target aarch64-unknown-linux-musl
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+        run: cargo build --release --target aarch64-unknown-linux-gnu
 
       - name: Package Lambda artifact
         run: |
           mkdir -p dist
-          cp target/aarch64-unknown-linux-musl/release/bootstrap dist/bootstrap
+          cp target/aarch64-unknown-linux-gnu/release/bootstrap dist/bootstrap
           cd dist && zip lambda.zip bootstrap
           echo "Artifact size: $(du -sh lambda.zip)"
 
