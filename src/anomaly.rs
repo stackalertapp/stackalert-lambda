@@ -4,7 +4,7 @@ use crate::cost_explorer::SpendHistory;
 #[derive(Debug, Clone)]
 pub struct Spike {
     pub service: String,
-    /// 7-day average daily cost (USD)
+    /// Average daily cost (USD) over the configured history window
     pub avg_daily: f64,
     /// Today's cost so far (USD)
     pub today: f64,
@@ -93,8 +93,9 @@ pub fn detect_spikes(
         }
     }
 
-    // Sort by extra spend descending (biggest surprise first)
-    spikes.sort_by(|a, b| b.extra_usd.partial_cmp(&a.extra_usd).unwrap());
+    // Sort by extra spend descending (biggest surprise first).
+    // total_cmp handles NaN without panicking (NaN sorts last).
+    spikes.sort_by(|a, b| b.extra_usd.total_cmp(&a.extra_usd));
     spikes
 }
 

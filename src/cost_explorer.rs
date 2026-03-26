@@ -18,9 +18,11 @@ pub type SpendHistory = HashMap<String, Vec<f64>>;
 /// Build AWS config for Cost Explorer queries.
 /// If cross-account role is configured, assumes that role first.
 /// Otherwise uses the Lambda's own credentials.
-pub async fn build_aws_config(cfg: &Config) -> Result<SdkConfig> {
-    let base_cfg = aws_config::load_from_env().await;
-
+///
+/// `base_cfg` is the Lambda's own AWS config (already loaded by the caller),
+/// which is also used by SSM and other services — passing it in avoids a
+/// redundant `load_from_env()` call per invocation.
+pub async fn build_aws_config(cfg: &Config, base_cfg: &SdkConfig) -> Result<SdkConfig> {
     match &cfg.cross_account_role_arn {
         Some(role_arn) => {
             info!(%role_arn, "Using cross-account mode");

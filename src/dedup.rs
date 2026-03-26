@@ -19,6 +19,8 @@ const SSM_PREFIX: &str = "/stackalert/last-alerted/";
 ///   - Service A alerting never blocks Service B (independent SSM keys)
 ///   - Same service in two different accounts alerts independently
 ///   - SSM failures degrade gracefully: assume "not yet alerted" and let the alert through
+///
+/// All SSM GetParameter calls are issued concurrently to minimise Lambda latency.
 pub async fn filter_new_spikes(
     ssm: &SsmClient,
     spikes: Vec<Spike>,
@@ -31,64 +33,90 @@ pub async fn filter_new_spikes(
 
     let cooldown_secs = cooldown_hours as i64 * 3600;
     let now = Utc::now().timestamp();
-    let mut new_spikes = Vec::new();
 
-    for spike in spikes {
+    // Fan-out: fire all SSM GetParameter calls concurrently.
+    // JoinSet preserves the task results so we can correlate them back to spikes by index.
+    let mut set = tokio::task::JoinSet::new();
+    for (i, spike) in spikes.iter().enumerate() {
         let key = ssm_key(namespace, &spike.service);
+        let ssm_clone = ssm.clone();
+        set.spawn(async move {
+            let ts = fetch_timestamp(&ssm_clone, &key).await;
+            (i, ts)
+        });
+    }
 
-        let last_alerted = fetch_timestamp(ssm, &key).await;
-
-        match last_alerted {
-            Some(ts) if now - ts < cooldown_secs => {
-                let secs_ago = now - ts;
-                let mins_ago = secs_ago / 60;
-                debug!(
-                    service = %spike.service,
-                    mins_ago,
-                    "Dedup: skipping spike — alerted recently"
-                );
-            }
-            Some(_) => {
-                debug!(service = %spike.service, "Dedup: cooldown expired — re-alerting");
-                new_spikes.push(spike);
-            }
-            None => {
-                debug!(service = %spike.service, "Dedup: first alert for this service");
-                new_spikes.push(spike);
-            }
+    // Collect results keyed by original index.
+    let mut timestamps: Vec<Option<i64>> = vec![None; spikes.len()];
+    while let Some(res) = set.join_next().await {
+        if let Ok((i, ts)) = res {
+            timestamps[i] = ts;
         }
     }
 
-    new_spikes
+    // Filter in original order so the most-expensive spike stays first.
+    spikes
+        .into_iter()
+        .enumerate()
+        .filter_map(|(i, spike)| {
+            match timestamps[i] {
+                Some(ts) if now - ts < cooldown_secs => {
+                    let mins_ago = (now - ts) / 60;
+                    debug!(
+                        service = %spike.service,
+                        mins_ago,
+                        "Dedup: skipping spike — alerted recently"
+                    );
+                    None
+                }
+                Some(_) => {
+                    debug!(service = %spike.service, "Dedup: cooldown expired — re-alerting");
+                    Some(spike)
+                }
+                None => {
+                    debug!(service = %spike.service, "Dedup: first alert for this service");
+                    Some(spike)
+                }
+            }
+        })
+        .collect()
 }
 
 /// Write the current timestamp to SSM for each alerted spike.
 /// Called after a Telegram message is successfully sent.
 ///
+/// All SSM PutParameter calls are issued concurrently.
 /// Failures are logged as warnings but do NOT abort the invocation.
 pub async fn mark_alerted(ssm: &SsmClient, spikes: &[Spike], namespace: &str) {
     let now_str = Utc::now().timestamp().to_string();
 
+    let mut set = tokio::task::JoinSet::new();
     for spike in spikes {
         let key = ssm_key(namespace, &spike.service);
-
-        match ssm
-            .put_parameter()
-            .name(&key)
-            .value(&now_str)
-            .r#type(ParameterType::String)
-            .overwrite(true)
-            .send()
-            .await
-        {
-            Ok(_) => info!(service = %spike.service, "Dedup: marked alerted in SSM"),
-            Err(e) => warn!(
-                service = %spike.service,
-                error = %e,
-                "Dedup: failed to write SSM timestamp — will re-alert next cycle"
-            ),
-        }
+        let ssm_clone = ssm.clone();
+        let value = now_str.clone();
+        let service = spike.service.clone();
+        set.spawn(async move {
+            match ssm_clone
+                .put_parameter()
+                .name(&key)
+                .value(&value)
+                .r#type(ParameterType::String)
+                .overwrite(true)
+                .send()
+                .await
+            {
+                Ok(_) => info!(service, "Dedup: marked alerted in SSM"),
+                Err(e) => warn!(
+                    service,
+                    error = %e,
+                    "Dedup: failed to write SSM timestamp — will re-alert next cycle"
+                ),
+            }
+        });
     }
+    // Drive all tasks to completion (errors already logged inside each task).
+    while set.join_next().await.is_some() {}
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────

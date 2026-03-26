@@ -67,7 +67,7 @@ impl Config {
             "Config loaded (single-account mode)"
         );
 
-        Ok(Config {
+        let cfg = Config {
             telegram_bot_token,
             telegram_chat_id,
             spike_threshold_pct,
@@ -77,7 +77,9 @@ impl Config {
             history_days: Self::parse_env_u32("HISTORY_DAYS", 7)?,
             min_avg_daily_usd: Self::parse_env_f64("MIN_AVG_DAILY_USD", 0.10)?,
             dedup_cooldown_hours: Self::parse_env_u32("DEDUP_COOLDOWN_HOURS", 6)?,
-        })
+        };
+        cfg.validate()?;
+        Ok(cfg)
     }
 
     // ── Multi-account mode (StackAlert SaaS / Step Functions) ───────────────
@@ -98,7 +100,7 @@ impl Config {
             "Config loaded (multi-account context)"
         );
 
-        Ok(Config {
+        let cfg = Config {
             telegram_bot_token,
             telegram_chat_id,
             spike_threshold_pct: ctx.spike_threshold,
@@ -110,10 +112,38 @@ impl Config {
             history_days: Self::parse_env_u32("HISTORY_DAYS", 7)?,
             min_avg_daily_usd: Self::parse_env_f64("MIN_AVG_DAILY_USD", 0.10)?,
             dedup_cooldown_hours: Self::parse_env_u32("DEDUP_COOLDOWN_HOURS", 6)?,
-        })
+        };
+        cfg.validate()?;
+        Ok(cfg)
     }
 
     // ── Shared helpers ───────────────────────────────────────────────────────
+
+    fn validate(&self) -> Result<()> {
+        if self.history_days == 0 {
+            return Err(anyhow::anyhow!(
+                "HISTORY_DAYS must be > 0 (got 0)"
+            ));
+        }
+        if self.spike_threshold_pct <= 0.0 {
+            return Err(anyhow::anyhow!(
+                "SPIKE_THRESHOLD_PCT must be > 0 (got {})",
+                self.spike_threshold_pct
+            ));
+        }
+        if self.min_avg_daily_usd < 0.0 {
+            return Err(anyhow::anyhow!(
+                "MIN_AVG_DAILY_USD must be >= 0 (got {})",
+                self.min_avg_daily_usd
+            ));
+        }
+        if self.dedup_cooldown_hours == 0 {
+            return Err(anyhow::anyhow!(
+                "DEDUP_COOLDOWN_HOURS must be > 0 (got 0)"
+            ));
+        }
+        Ok(())
+    }
 
     fn parse_env_u32(key: &str, default: u32) -> Result<u32> {
         match std::env::var(key) {

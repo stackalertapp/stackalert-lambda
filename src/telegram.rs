@@ -34,8 +34,9 @@ pub async fn send_daily_digest(
     bot_token: &str,
     chat_id: &str,
     spend_data: &SpendHistory,
+    min_avg_daily: f64,
 ) -> Result<bool> {
-    let text = build_digest_message(spend_data);
+    let text = build_digest_message(spend_data, min_avg_daily);
     send_message(bot_token, chat_id, &text).await
 }
 
@@ -114,7 +115,7 @@ fn build_spike_message(spikes: &[Spike]) -> String {
     msg
 }
 
-fn build_digest_message(spend_data: &SpendHistory) -> String {
+fn build_digest_message(spend_data: &SpendHistory, min_avg_daily: f64) -> String {
     let mut msg = String::from("📊 <b>Daily AWS Cost Digest</b>\n\n");
 
     let mut services: Vec<(String, f64, f64)> = spend_data
@@ -128,10 +129,11 @@ fn build_digest_message(spend_data: &SpendHistory) -> String {
             };
             (service.clone(), avg, total)
         })
-        .filter(|(_, avg, _)| *avg >= 0.10)
+        .filter(|(_, avg, _)| *avg >= min_avg_daily)
         .collect();
 
-    services.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+    // total_cmp handles NaN without panicking (NaN sorts last).
+    services.sort_by(|a, b| b.1.total_cmp(&a.1));
 
     let grand_total_daily: f64 = services.iter().map(|(_, avg, _)| avg).sum();
 
@@ -217,7 +219,7 @@ mod tests {
             "Amazon S3".to_string(),
             vec![0.50, 0.45, 0.55, 0.48, 0.52, 0.47, 0.53],
         );
-        let msg = build_digest_message(&spend_data);
+        let msg = build_digest_message(&spend_data, 0.10);
         assert!(msg.contains("Daily AWS Cost Digest"));
         assert!(msg.contains("Amazon EC2"));
         assert!(msg.contains("Avg daily spend"));
@@ -228,7 +230,7 @@ mod tests {
         let mut spend_data = HashMap::new();
         spend_data.insert("Amazon EC2".to_string(), vec![18.0, 19.0, 17.5]);
         spend_data.insert("AWS Tax".to_string(), vec![0.01, 0.02, 0.01]);
-        let msg = build_digest_message(&spend_data);
+        let msg = build_digest_message(&spend_data, 0.10);
         assert!(msg.contains("Amazon EC2"));
         assert!(!msg.contains("AWS Tax"));
     }
