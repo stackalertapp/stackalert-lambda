@@ -130,7 +130,10 @@ async fn run_spike_check(cfg: &config::Config) -> Result<CheckResponse> {
             Err(e) => tracing::warn!(error = %e, "Telegram send failed — continuing"),
         }
     } else if spikes_found > 0 {
-        info!(spikes_found, "All spikes suppressed by dedup — no alert sent");
+        info!(
+            spikes_found,
+            "All spikes suppressed by dedup — no alert sent"
+        );
     } else {
         info!("No spikes detected");
     }

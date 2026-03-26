@@ -58,25 +58,23 @@ pub async fn filter_new_spikes(
     spikes
         .into_iter()
         .enumerate()
-        .filter_map(|(i, spike)| {
-            match timestamps[i] {
-                Some(ts) if now - ts < cooldown_secs => {
-                    let mins_ago = (now - ts) / 60;
-                    debug!(
-                        service = %spike.service,
-                        mins_ago,
-                        "Dedup: skipping spike — alerted recently"
-                    );
-                    None
-                }
-                Some(_) => {
-                    debug!(service = %spike.service, "Dedup: cooldown expired — re-alerting");
-                    Some(spike)
-                }
-                None => {
-                    debug!(service = %spike.service, "Dedup: first alert for this service");
-                    Some(spike)
-                }
+        .filter_map(|(i, spike)| match timestamps[i] {
+            Some(ts) if now - ts < cooldown_secs => {
+                let mins_ago = (now - ts) / 60;
+                debug!(
+                    service = %spike.service,
+                    mins_ago,
+                    "Dedup: skipping spike — alerted recently"
+                );
+                None
+            }
+            Some(_) => {
+                debug!(service = %spike.service, "Dedup: cooldown expired — re-alerting");
+                Some(spike)
+            }
+            None => {
+                debug!(service = %spike.service, "Dedup: first alert for this service");
+                Some(spike)
             }
         })
         .collect()

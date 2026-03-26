@@ -121,9 +121,7 @@ impl Config {
 
     fn validate(&self) -> Result<()> {
         if self.history_days == 0 {
-            return Err(anyhow::anyhow!(
-                "HISTORY_DAYS must be > 0 (got 0)"
-            ));
+            return Err(anyhow::anyhow!("HISTORY_DAYS must be > 0 (got 0)"));
         }
         if self.spike_threshold_pct <= 0.0 {
             return Err(anyhow::anyhow!(
@@ -138,9 +136,7 @@ impl Config {
             ));
         }
         if self.dedup_cooldown_hours == 0 {
-            return Err(anyhow::anyhow!(
-                "DEDUP_COOLDOWN_HOURS must be > 0 (got 0)"
-            ));
+            return Err(anyhow::anyhow!("DEDUP_COOLDOWN_HOURS must be > 0 (got 0)"));
         }
         Ok(())
     }

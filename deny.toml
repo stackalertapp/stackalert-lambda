@@ -28,14 +28,8 @@ allow = [
   "CC0-1.0",
   "OpenSSL",
 ]
-deny = [
-  "GPL-2.0",
-  "GPL-3.0",
-  "LGPL-2.0",
-  "LGPL-2.1",
-  "LGPL-3.0",
-  "AGPL-3.0",
-]
+# Anything not in `allow` above is denied by default (cargo-deny >= 0.14).
+# The explicit `deny` key was removed — see https://github.com/EmbarkStudios/cargo-deny/pull/611
 confidence-threshold = 0.8
 
 # ── Bans ──────────────────────────────────────────────────────────────────────
