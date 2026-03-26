@@ -27,7 +27,7 @@ pub async fn build_aws_config(cfg: &Config, base_cfg: &SdkConfig) -> Result<SdkC
         Some(role_arn) => {
             info!(%role_arn, "Using cross-account mode");
             assume_role(
-                &base_cfg,
+                base_cfg,
                 role_arn,
                 "stackalert-check",
                 cfg.external_id.as_deref(),

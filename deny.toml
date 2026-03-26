@@ -27,6 +27,7 @@ allow = [
   "Unicode-3.0",
   "CC0-1.0",
   "OpenSSL",
+  "CDLA-Permissive-2.0",
 ]
 # Anything not in `allow` above is denied by default (cargo-deny >= 0.14).
 # The explicit `deny` key was removed — see https://github.com/EmbarkStudios/cargo-deny/pull/611
