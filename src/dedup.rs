@@ -7,15 +7,13 @@ use crate::anomaly::Spike;
 /// SSM path prefix for dedup timestamps.
 const SSM_PREFIX: &str = "/stackalert/last-alerted/";
 
-/// How long to suppress repeat alerts for the same service (seconds).
-/// Matches the 6h EventBridge schedule — so each schedule window alerts at most once per service.
-const COOLDOWN_SECS: i64 = 6 * 3600;
-
 /// Filter out spikes that were alerted for the same service within the cooldown window.
 ///
 /// `namespace` isolates different accounts:
 ///   - self-hosted / single-account mode: `"self"`
 ///   - multi-account SaaS mode:           the customer's AWS account ID
+///
+/// `cooldown_hours` — how long to suppress repeat alerts (matches `DEDUP_COOLDOWN_HOURS` config).
 ///
 /// This means:
 ///   - Service A alerting never blocks Service B (independent SSM keys)
@@ -25,11 +23,13 @@ pub async fn filter_new_spikes(
     ssm: &SsmClient,
     spikes: Vec<Spike>,
     namespace: &str,
+    cooldown_hours: u32,
 ) -> Vec<Spike> {
     if spikes.is_empty() {
         return spikes;
     }
 
+    let cooldown_secs = cooldown_hours as i64 * 3600;
     let now = Utc::now().timestamp();
     let mut new_spikes = Vec::new();
 
@@ -39,7 +39,7 @@ pub async fn filter_new_spikes(
         let last_alerted = fetch_timestamp(ssm, &key).await;
 
         match last_alerted {
-            Some(ts) if now - ts < COOLDOWN_SECS => {
+            Some(ts) if now - ts < cooldown_secs => {
                 let secs_ago = now - ts;
                 let mins_ago = secs_ago / 60;
                 debug!(

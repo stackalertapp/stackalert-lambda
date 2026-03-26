@@ -29,6 +29,19 @@ pub struct Config {
     /// This isolates dedup state so the same service spiking in two different
     /// customer accounts results in two independent alerts.
     pub account_namespace: String,
+
+    /// Number of historical days used to compute the baseline average.
+    /// Env: `HISTORY_DAYS` (default: 7)
+    pub history_days: u32,
+
+    /// Services whose 7-day average daily cost is below this value are ignored (noise filter).
+    /// Env: `MIN_AVG_DAILY_USD` (default: 0.10)
+    pub min_avg_daily_usd: f64,
+
+    /// How many hours to suppress repeat alerts for the same service after one was sent.
+    /// Should match (or be a multiple of) the EventBridge schedule interval.
+    /// Env: `DEDUP_COOLDOWN_HOURS` (default: 6)
+    pub dedup_cooldown_hours: u32,
 }
 
 impl Config {
@@ -61,6 +74,9 @@ impl Config {
             cross_account_role_arn,
             external_id,
             account_namespace: "self".to_string(),
+            history_days: Self::parse_env_u32("HISTORY_DAYS", 7)?,
+            min_avg_daily_usd: Self::parse_env_f64("MIN_AVG_DAILY_USD", 0.10)?,
+            dedup_cooldown_hours: Self::parse_env_u32("DEDUP_COOLDOWN_HOURS", 6)?,
         })
     }
 
@@ -89,10 +105,33 @@ impl Config {
             cross_account_role_arn: Some(ctx.role_arn.clone()),
             external_id: Some(ctx.external_id.clone()),
             account_namespace: ctx.aws_account_id.clone(),
+            // Multi-account mode reuses the same env var defaults.
+            // Individual account overrides can be added to AccountContext later.
+            history_days: Self::parse_env_u32("HISTORY_DAYS", 7)?,
+            min_avg_daily_usd: Self::parse_env_f64("MIN_AVG_DAILY_USD", 0.10)?,
+            dedup_cooldown_hours: Self::parse_env_u32("DEDUP_COOLDOWN_HOURS", 6)?,
         })
     }
 
-    // ── Shared helper ────────────────────────────────────────────────────────
+    // ── Shared helpers ───────────────────────────────────────────────────────
+
+    fn parse_env_u32(key: &str, default: u32) -> Result<u32> {
+        match std::env::var(key) {
+            Ok(val) => val
+                .parse::<u32>()
+                .with_context(|| format!("{key} must be a positive integer, got {val:?}")),
+            Err(_) => Ok(default),
+        }
+    }
+
+    fn parse_env_f64(key: &str, default: f64) -> Result<f64> {
+        match std::env::var(key) {
+            Ok(val) => val
+                .parse::<f64>()
+                .with_context(|| format!("{key} must be a number, got {val:?}")),
+            Err(_) => Ok(default),
+        }
+    }
 
     async fn load_bot_token() -> Result<String> {
         let ssm_param = std::env::var("TELEGRAM_BOT_TOKEN_SSM_PARAM")

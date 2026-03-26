@@ -75,20 +75,32 @@ async fn handler(event: LambdaEvent<SchedulerEvent>) -> Result<CheckResponse, Er
 
 async fn run_spike_check(cfg: &config::Config) -> Result<CheckResponse> {
     // Cost Explorer uses cross-account credentials (or Lambda's own in single-account mode).
+    // Fetch history_days + 1 so we have `history_days` full historical days plus today.
     let aws_cfg = cost_explorer::build_aws_config(cfg).await?;
-    let spend_data = cost_explorer::fetch_spend(&aws_cfg, 8).await?;
-    let all_spikes = anomaly::detect_spikes(&spend_data, cfg.spike_threshold_pct);
+    let spend_data = cost_explorer::fetch_spend(&aws_cfg, cfg.history_days as i64 + 1).await?;
+    let all_spikes = anomaly::detect_spikes(
+        &spend_data,
+        cfg.spike_threshold_pct,
+        cfg.history_days,
+        cfg.min_avg_daily_usd,
+    );
 
     // Dedup uses the Lambda's own credentials — SSM state lives in the Lambda's account,
     // not in the customer account, so it works for both single and multi-account modes.
     let base_cfg = aws_config::load_from_env().await;
     let ssm = aws_sdk_ssm::Client::new(&base_cfg);
 
-    // Filter out services that were already alerted within the cooldown window (6h).
+    // Filter out services that were already alerted within the cooldown window.
     // Each service has an independent cooldown — a new spike on Service B is never
     // suppressed by an ongoing alert on Service A.
     let spikes_found = all_spikes.len();
-    let new_spikes = dedup::filter_new_spikes(&ssm, all_spikes, &cfg.account_namespace).await;
+    let new_spikes = dedup::filter_new_spikes(
+        &ssm,
+        all_spikes,
+        &cfg.account_namespace,
+        cfg.dedup_cooldown_hours,
+    )
+    .await;
 
     info!(
         spikes_found,
@@ -129,7 +141,7 @@ async fn run_spike_check(cfg: &config::Config) -> Result<CheckResponse> {
 
 async fn run_digest(cfg: &config::Config) -> Result<CheckResponse> {
     let aws_cfg = cost_explorer::build_aws_config(cfg).await?;
-    let spend_data = cost_explorer::fetch_spend(&aws_cfg, 7).await?;
+    let spend_data = cost_explorer::fetch_spend(&aws_cfg, cfg.history_days as i64).await?;
 
     let alerts_sent = match telegram::send_daily_digest(
         &cfg.telegram_bot_token,
