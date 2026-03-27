@@ -11,6 +11,13 @@ use tracing::{debug, info};
 
 use crate::config::Config;
 
+/// Sub-cent cost amounts are noise from AWS rounding — filtered out of spend data
+/// and anomaly detection. Shared with `anomaly::detect_spikes`.
+pub const MIN_COST_THRESHOLD: f64 = 0.01;
+
+/// STS AssumeRole session duration in seconds (minimum allowed by AWS).
+const STS_SESSION_DURATION_SECS: i32 = 900;
+
 /// Daily spend per service: { "Amazon EC2": [18.40, 19.20, ...] }
 /// Index 0 = oldest day, last index = today (partial)
 pub type SpendHistory = HashMap<String, Vec<f64>>;
@@ -64,7 +71,7 @@ async fn assume_role(
         .assume_role()
         .role_arn(role_arn)
         .role_session_name(session_name)
-        .duration_seconds(900);
+        .duration_seconds(STS_SESSION_DURATION_SECS);
 
     if let Some(eid) = external_id {
         req = req.external_id(eid);
@@ -181,7 +188,7 @@ pub async fn fetch_spend(cfg: &SdkConfig, days: i64) -> Result<SpendHistory> {
                 .and_then(|s| s.parse::<f64>().ok())
                 .unwrap_or(0.0);
 
-            if amount < 0.01 {
+            if amount < MIN_COST_THRESHOLD {
                 continue;
             }
 

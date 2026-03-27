@@ -1,4 +1,4 @@
-use crate::cost_explorer::SpendHistory;
+use crate::cost_explorer::{MIN_COST_THRESHOLD, SpendHistory};
 
 /// A detected cost spike for a single AWS service
 #[derive(Debug, Clone)]
@@ -55,7 +55,7 @@ pub fn detect_spikes(
         }
 
         // Filter out zero days (service wasn't running those days)
-        let non_zero: Vec<f64> = window.iter().copied().filter(|&v| v > 0.01).collect();
+        let non_zero: Vec<f64> = window.iter().copied().filter(|&v| v > MIN_COST_THRESHOLD).collect();
 
         if non_zero.is_empty() {
             // Service appeared for the first time in the window — flag any cost as a spike.

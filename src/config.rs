@@ -42,6 +42,22 @@ pub struct Config {
     /// Should match (or be a multiple of) the EventBridge schedule interval.
     /// Env: `DEDUP_COOLDOWN_HOURS` (default: 6)
     pub dedup_cooldown_hours: u32,
+
+    /// Max services shown in spike alert messages.
+    /// Env: `MAX_SPIKE_DISPLAY` (default: 5)
+    pub max_spike_display: usize,
+
+    /// Max services shown in daily digest messages.
+    /// Env: `MAX_DIGEST_DISPLAY` (default: 10)
+    pub max_digest_display: usize,
+
+    /// Telegram HTTP request timeout in seconds.
+    /// Env: `TELEGRAM_TIMEOUT_SECS` (default: 10)
+    pub telegram_timeout_secs: u64,
+
+    /// Telegram HTTP connect timeout in seconds.
+    /// Env: `TELEGRAM_CONNECT_TIMEOUT_SECS` (default: 5)
+    pub telegram_connect_timeout_secs: u64,
 }
 
 impl Config {
@@ -77,6 +93,10 @@ impl Config {
             history_days: Self::parse_env_u32("HISTORY_DAYS", 7)?,
             min_avg_daily_usd: Self::parse_env_f64("MIN_AVG_DAILY_USD", 0.10)?,
             dedup_cooldown_hours: Self::parse_env_u32("DEDUP_COOLDOWN_HOURS", 6)?,
+            max_spike_display: Self::parse_env_usize("MAX_SPIKE_DISPLAY", 5)?,
+            max_digest_display: Self::parse_env_usize("MAX_DIGEST_DISPLAY", 10)?,
+            telegram_timeout_secs: Self::parse_env_u64("TELEGRAM_TIMEOUT_SECS", 10)?,
+            telegram_connect_timeout_secs: Self::parse_env_u64("TELEGRAM_CONNECT_TIMEOUT_SECS", 5)?,
         };
         cfg.validate()?;
         Ok(cfg)
@@ -113,6 +133,10 @@ impl Config {
             history_days: Self::parse_env_u32("HISTORY_DAYS", 7)?,
             min_avg_daily_usd: Self::parse_env_f64("MIN_AVG_DAILY_USD", 0.10)?,
             dedup_cooldown_hours: Self::parse_env_u32("DEDUP_COOLDOWN_HOURS", 6)?,
+            max_spike_display: Self::parse_env_usize("MAX_SPIKE_DISPLAY", 5)?,
+            max_digest_display: Self::parse_env_usize("MAX_DIGEST_DISPLAY", 10)?,
+            telegram_timeout_secs: Self::parse_env_u64("TELEGRAM_TIMEOUT_SECS", 10)?,
+            telegram_connect_timeout_secs: Self::parse_env_u64("TELEGRAM_CONNECT_TIMEOUT_SECS", 5)?,
         };
         cfg.validate()?;
         Ok(cfg)
@@ -146,6 +170,24 @@ impl Config {
         match std::env::var(key) {
             Ok(val) => val
                 .parse::<u32>()
+                .with_context(|| format!("{key} must be a positive integer, got {val:?}")),
+            Err(_) => Ok(default),
+        }
+    }
+
+    fn parse_env_usize(key: &str, default: usize) -> Result<usize> {
+        match std::env::var(key) {
+            Ok(val) => val
+                .parse::<usize>()
+                .with_context(|| format!("{key} must be a positive integer, got {val:?}")),
+            Err(_) => Ok(default),
+        }
+    }
+
+    fn parse_env_u64(key: &str, default: u64) -> Result<u64> {
+        match std::env::var(key) {
+            Ok(val) => val
+                .parse::<u64>()
                 .with_context(|| format!("{key} must be a positive integer, got {val:?}")),
             Err(_) => Ok(default),
         }

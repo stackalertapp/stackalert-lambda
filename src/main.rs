@@ -126,11 +126,7 @@ async fn run_spike_check(cfg: &config::Config, base_cfg: &aws_config::SdkConfig)
 
     let mut alerts_sent = 0;
     if !new_spikes.is_empty() {
-        match telegram::send_spike_alert(
-            &cfg.telegram_bot_token,
-            &cfg.telegram_chat_id,
-            &new_spikes,
-        )
+        match telegram::send_spike_alert(cfg, &new_spikes)
         .await
         {
             Ok(true) => {
@@ -161,12 +157,7 @@ async fn run_digest(cfg: &config::Config, base_cfg: &aws_config::SdkConfig) -> R
     let aws_cfg = cost_explorer::build_aws_config(cfg, base_cfg).await?;
     let spend_data = cost_explorer::fetch_spend(&aws_cfg, cfg.history_days as i64).await?;
 
-    let alerts_sent = match telegram::send_daily_digest(
-        &cfg.telegram_bot_token,
-        &cfg.telegram_chat_id,
-        &spend_data,
-        cfg.min_avg_daily_usd,
-    )
+    let alerts_sent = match telegram::send_daily_digest(cfg, &spend_data)
     .await
     {
         Ok(sent) => sent as usize,

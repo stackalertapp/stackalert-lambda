@@ -1,55 +1,55 @@
 use crate::anomaly::Spike;
+use crate::config::Config;
 use crate::cost_explorer::SpendHistory;
 use anyhow::{Context, Result};
 use reqwest::Client;
-use std::sync::LazyLock;
+use std::sync::OnceLock;
 use std::time::Duration;
 use tracing::{info, warn};
 
 const TELEGRAM_API: &str = "https://api.telegram.org";
 
 /// Module-level HTTP client — reused across Lambda warm invocations.
-/// Avoids TCP connection setup overhead on every check.
-static HTTP_CLIENT: LazyLock<Client> = LazyLock::new(|| {
-    Client::builder()
-        .timeout(Duration::from_secs(10))
-        .connect_timeout(Duration::from_secs(5))
-        .build()
-        .expect("Failed to build HTTP client")
-});
+/// Initialised on first call with timeout values from `Config`.
+static HTTP_CLIENT: OnceLock<Client> = OnceLock::new();
+
+fn http_client(cfg: &Config) -> &Client {
+    HTTP_CLIENT.get_or_init(|| {
+        Client::builder()
+            .timeout(Duration::from_secs(cfg.telegram_timeout_secs))
+            .connect_timeout(Duration::from_secs(cfg.telegram_connect_timeout_secs))
+            .build()
+            .expect("Failed to build HTTP client")
+    })
+}
 
 /// Send a Telegram alert when cost spikes are detected.
 /// Returns true if the message was sent successfully.
-pub async fn send_spike_alert(bot_token: &str, chat_id: &str, spikes: &[Spike]) -> Result<bool> {
+pub async fn send_spike_alert(cfg: &Config, spikes: &[Spike]) -> Result<bool> {
     if spikes.is_empty() {
         return Ok(false);
     }
 
-    let text = build_spike_message(spikes);
-    send_message(bot_token, chat_id, &text).await
+    let text = build_spike_message(spikes, cfg.dedup_cooldown_hours, cfg.max_spike_display);
+    send_message(cfg, &text).await
 }
 
 /// Send a daily cost digest via Telegram.
-pub async fn send_daily_digest(
-    bot_token: &str,
-    chat_id: &str,
-    spend_data: &SpendHistory,
-    min_avg_daily: f64,
-) -> Result<bool> {
-    let text = build_digest_message(spend_data, min_avg_daily);
-    send_message(bot_token, chat_id, &text).await
+pub async fn send_daily_digest(cfg: &Config, spend_data: &SpendHistory) -> Result<bool> {
+    let text = build_digest_message(spend_data, cfg.min_avg_daily_usd, cfg.max_digest_display);
+    send_message(cfg, &text).await
 }
 
-async fn send_message(bot_token: &str, chat_id: &str, text: &str) -> Result<bool> {
+async fn send_message(cfg: &Config, text: &str) -> Result<bool> {
     // NOTE: Telegram requires the bot token in the URL path — there is no header-based
     // alternative.  Never log `url` or the request object; doing so would leak the token
     // into CloudWatch.  All tracing statements in this function intentionally omit it.
-    let url = format!("{TELEGRAM_API}/bot{bot_token}/sendMessage");
+    let url = format!("{TELEGRAM_API}/bot{}/sendMessage", cfg.telegram_bot_token);
 
-    let resp = HTTP_CLIENT
+    let resp = http_client(cfg)
         .post(&url)
         .json(&serde_json::json!({
-            "chat_id": chat_id,
+            "chat_id": cfg.telegram_chat_id,
             "text": text,
             "parse_mode": "HTML",
             "disable_web_page_preview": true,
@@ -71,7 +71,7 @@ async fn send_message(bot_token: &str, chat_id: &str, text: &str) -> Result<bool
     }
 }
 
-fn build_spike_message(spikes: &[Spike]) -> String {
+fn build_spike_message(spikes: &[Spike], check_interval_hours: u32, max_display: usize) -> String {
     let total_extra: f64 = spikes.iter().map(|s| s.extra_usd).sum();
     let top_spike = &spikes[0];
 
@@ -92,7 +92,7 @@ fn build_spike_message(spikes: &[Spike]) -> String {
     msg.push_str(&format!("💰 Total extra spend: ~${:.2}\n\n", total_extra));
 
     msg.push_str("<b>Affected services:</b>\n");
-    for spike in spikes.iter().take(5) {
+    for spike in spikes.iter().take(max_display) {
         let pct = if spike.pct_increase.is_infinite() {
             "NEW".to_string()
         } else {
@@ -107,18 +107,20 @@ fn build_spike_message(spikes: &[Spike]) -> String {
         ));
     }
 
-    if spikes.len() > 5 {
+    if spikes.len() > max_display {
         msg.push_str(&format!(
             "<i>...and {} more services</i>\n",
-            spikes.len() - 5
+            spikes.len() - max_display
         ));
     }
 
-    msg.push_str("\n🔔 StackAlert · Checks every 6h");
+    msg.push_str(&format!(
+        "\n🔔 StackAlert · Checks every {check_interval_hours}h"
+    ));
     msg
 }
 
-fn build_digest_message(spend_data: &SpendHistory, min_avg_daily: f64) -> String {
+fn build_digest_message(spend_data: &SpendHistory, min_avg_daily: f64, max_display: usize) -> String {
     let mut msg = String::from("📊 <b>Daily AWS Cost Digest</b>\n\n");
 
     let mut services: Vec<(String, f64, f64)> = spend_data
@@ -146,14 +148,14 @@ fn build_digest_message(spend_data: &SpendHistory, min_avg_daily: f64) -> String
     ));
 
     msg.push_str("<b>Top services (avg/day):</b>\n");
-    for (service, avg, _) in services.iter().take(10) {
+    for (service, avg, _) in services.iter().take(max_display) {
         msg.push_str(&format!("• {} — ${:.2}/day\n", escape_html(service), avg));
     }
 
-    if services.len() > 10 {
+    if services.len() > max_display {
         msg.push_str(&format!(
             "<i>...and {} more services</i>\n",
-            services.len() - 10
+            services.len() - max_display
         ));
     }
 
@@ -190,7 +192,7 @@ mod tests {
                 extra_usd: 15.0,
             },
         ];
-        let msg = build_spike_message(&spikes);
+        let msg = build_spike_message(&spikes, 6, 5);
         assert!(msg.contains("AWS Cost Spike Detected"));
         assert!(msg.contains("Amazon EC2"));
         assert!(msg.contains("Amazon RDS"));
@@ -206,7 +208,7 @@ mod tests {
             pct_increase: f64::INFINITY,
             extra_usd: 45.0,
         }];
-        let msg = build_spike_message(&spikes);
+        let msg = build_spike_message(&spikes, 6, 5);
         assert!(msg.contains("NEW"));
         assert!(msg.contains("SageMaker"));
     }
@@ -222,7 +224,7 @@ mod tests {
             "Amazon S3".to_string(),
             vec![0.50, 0.45, 0.55, 0.48, 0.52, 0.47, 0.53],
         );
-        let msg = build_digest_message(&spend_data, 0.10);
+        let msg = build_digest_message(&spend_data, 0.10, 10);
         assert!(msg.contains("Daily AWS Cost Digest"));
         assert!(msg.contains("Amazon EC2"));
         assert!(msg.contains("Avg daily spend"));
@@ -233,7 +235,7 @@ mod tests {
         let mut spend_data = HashMap::new();
         spend_data.insert("Amazon EC2".to_string(), vec![18.0, 19.0, 17.5]);
         spend_data.insert("AWS Tax".to_string(), vec![0.01, 0.02, 0.01]);
-        let msg = build_digest_message(&spend_data, 0.10);
+        let msg = build_digest_message(&spend_data, 0.10, 10);
         assert!(msg.contains("Amazon EC2"));
         assert!(!msg.contains("AWS Tax"));
     }
@@ -254,7 +256,7 @@ mod tests {
                 extra_usd: 10.0 - i as f64,
             })
             .collect();
-        let msg = build_spike_message(&spikes);
+        let msg = build_spike_message(&spikes, 6, 5);
         assert!(msg.contains("...and 2 more services"));
     }
 }
