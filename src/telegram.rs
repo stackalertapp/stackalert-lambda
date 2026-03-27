@@ -1,8 +1,8 @@
 use crate::anomaly::Spike;
 use crate::cost_explorer::SpendHistory;
 use anyhow::{Context, Result};
-use once_cell::sync::Lazy;
 use reqwest::Client;
+use std::sync::LazyLock;
 use std::time::Duration;
 use tracing::{info, warn};
 
@@ -10,7 +10,7 @@ const TELEGRAM_API: &str = "https://api.telegram.org";
 
 /// Module-level HTTP client — reused across Lambda warm invocations.
 /// Avoids TCP connection setup overhead on every check.
-static HTTP_CLIENT: Lazy<Client> = Lazy::new(|| {
+static HTTP_CLIENT: LazyLock<Client> = LazyLock::new(|| {
     Client::builder()
         .timeout(Duration::from_secs(10))
         .connect_timeout(Duration::from_secs(5))

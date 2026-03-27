@@ -136,12 +136,11 @@ pub async fn fetch_spend(cfg: &SdkConfig, days: i64) -> Result<SpendHistory> {
     let mut date_order: Vec<NaiveDate> = Vec::new();
 
     for result in results {
-        if let Some(period) = result.time_period() {
-            if let Ok(date) = NaiveDate::parse_from_str(period.start(), "%Y-%m-%d") {
-                if !date_order.contains(&date) {
-                    date_order.push(date);
-                }
-            }
+        if let Some(period) = result.time_period()
+            && let Ok(date) = NaiveDate::parse_from_str(period.start(), "%Y-%m-%d")
+            && !date_order.contains(&date)
+        {
+            date_order.push(date);
         }
     }
     date_order.sort();

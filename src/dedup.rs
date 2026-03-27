@@ -1,4 +1,4 @@
-use aws_sdk_ssm::{types::ParameterType, Client as SsmClient};
+use aws_sdk_ssm::{Client as SsmClient, types::ParameterType};
 use chrono::Utc;
 use tracing::{debug, info, warn};
 

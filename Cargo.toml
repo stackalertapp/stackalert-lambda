@@ -1,7 +1,8 @@
 [package]
 name = "stackalert-lambda"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
+rust-version = "1.93"
 description = "StackAlert — AWS cost spike detection Lambda (Rust)"
 license = "Apache-2.0"
 repository = "https://github.com/stackalertapp/stackalert-lambda"
@@ -12,7 +13,7 @@ path = "src/main.rs"
 
 [dependencies]
 # AWS Lambda runtime
-lambda_runtime = "0.13"
+lambda_runtime = "1.0"
 
 # AWS SDK
 aws-config = { version = "1", features = ["behavior-version-latest"] }
@@ -25,7 +26,7 @@ aws-credential-types = { version = "1", features = ["hardcoded-credentials"] }
 tokio = { version = "1", features = ["full"] }
 
 # HTTP client for Telegram API
-reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+reqwest = { version = "0.13", features = ["json", "rustls"], default-features = false }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
@@ -33,8 +34,7 @@ serde_json = "1"
 
 # Error handling
 anyhow = "1"
-once_cell = "1"
-thiserror = "1"
+thiserror = "2"
 
 # Dead letter queue support
 aws-sdk-sqs = "1"

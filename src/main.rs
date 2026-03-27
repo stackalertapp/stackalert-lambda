@@ -6,7 +6,7 @@ mod dedup;
 mod telegram;
 
 use anyhow::Result;
-use lambda_runtime::{run, service_fn, tracing, Error, LambdaEvent};
+use lambda_runtime::{Error, LambdaEvent, run, service_fn, tracing};
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
