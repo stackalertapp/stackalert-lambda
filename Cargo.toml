@@ -23,7 +23,7 @@ aws-sdk-sts = "1"
 aws-credential-types = { version = "1", features = ["hardcoded-credentials"] }
 
 # Async runtime
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
 
 # HTTP client for Telegram API
 reqwest = { version = "0.13", features = ["json", "rustls"], default-features = false }
@@ -34,10 +34,6 @@ serde_json = "1"
 
 # Error handling
 anyhow = "1"
-thiserror = "2"
-
-# Dead letter queue support
-aws-sdk-sqs = "1"
 
 # Logging
 tracing = "0.1"

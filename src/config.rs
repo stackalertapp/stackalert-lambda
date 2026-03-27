@@ -47,7 +47,7 @@ pub struct Config {
 impl Config {
     // ── Single-account mode (open-source / self-hosted) ─────────────────────
 
-    pub async fn load() -> Result<Self> {
+    pub async fn load(base_cfg: &aws_config::SdkConfig) -> Result<Self> {
         let telegram_chat_id =
             std::env::var("TELEGRAM_CHAT_ID").context("TELEGRAM_CHAT_ID env var not set")?;
 
@@ -59,7 +59,7 @@ impl Config {
         let cross_account_role_arn = std::env::var("CROSS_ACCOUNT_ROLE_ARN").ok();
         let external_id = std::env::var("EXTERNAL_ID").ok();
 
-        let telegram_bot_token = Self::load_bot_token().await?;
+        let telegram_bot_token = Self::load_bot_token(base_cfg).await?;
 
         info!(
             cross_account = cross_account_role_arn.is_some(),
@@ -84,14 +84,15 @@ impl Config {
 
     // ── Multi-account mode (StackAlert SaaS / Step Functions) ───────────────
 
-    pub async fn from_account_context(ctx: &AccountContext) -> Result<Self> {
-        let telegram_bot_token = Self::load_bot_token().await?;
+    pub async fn from_account_context(ctx: &AccountContext, base_cfg: &aws_config::SdkConfig) -> Result<Self> {
+        let telegram_bot_token = Self::load_bot_token(base_cfg).await?;
 
         let telegram_chat_id = ctx
             .telegram_chat_id
             .clone()
             .or_else(|| std::env::var("TELEGRAM_CHAT_ID").ok())
-            .unwrap_or_default();
+            .filter(|s| !s.is_empty())
+            .context("telegram_chat_id missing from both AccountContext and TELEGRAM_CHAT_ID env var")?;
 
         info!(
             account_id = %ctx.aws_account_id,
@@ -159,12 +160,11 @@ impl Config {
         }
     }
 
-    async fn load_bot_token() -> Result<String> {
+    async fn load_bot_token(base_cfg: &aws_config::SdkConfig) -> Result<String> {
         let ssm_param = std::env::var("TELEGRAM_BOT_TOKEN_SSM_PARAM")
             .context("TELEGRAM_BOT_TOKEN_SSM_PARAM env var not set")?;
 
-        let aws_cfg = aws_config::load_from_env().await;
-        let ssm = aws_sdk_ssm::Client::new(&aws_cfg);
+        let ssm = aws_sdk_ssm::Client::new(base_cfg);
 
         let resp = ssm
             .get_parameter()

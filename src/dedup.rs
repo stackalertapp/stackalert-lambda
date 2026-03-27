@@ -133,6 +133,10 @@ async fn fetch_timestamp(ssm: &SsmClient, key: &str) -> Option<i64> {
 ///   namespace="self",         service="Amazon EC2"   → /stackalert/last-alerted/self/Amazon_EC2
 ///   namespace="700483457242", service="Amazon RDS"   → /stackalert/last-alerted/700483457242/Amazon_RDS
 fn ssm_key(namespace: &str, service: &str) -> String {
+    let safe_ns: String = namespace
+        .chars()
+        .map(|c| if c.is_alphanumeric() || c == '-' { c } else { '_' })
+        .collect();
     let safe_service: String = service
         .chars()
         .map(|c| {
@@ -143,7 +147,7 @@ fn ssm_key(namespace: &str, service: &str) -> String {
             }
         })
         .collect();
-    format!("{SSM_PREFIX}{namespace}/{safe_service}")
+    format!("{SSM_PREFIX}{safe_ns}/{safe_service}")
 }
 
 #[cfg(test)]

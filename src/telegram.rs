@@ -41,6 +41,9 @@ pub async fn send_daily_digest(
 }
 
 async fn send_message(bot_token: &str, chat_id: &str, text: &str) -> Result<bool> {
+    // NOTE: Telegram requires the bot token in the URL path — there is no header-based
+    // alternative.  Never log `url` or the request object; doing so would leak the token
+    // into CloudWatch.  All tracing statements in this function intentionally omit it.
     let url = format!("{TELEGRAM_API}/bot{bot_token}/sendMessage");
 
     let resp = HTTP_CLIENT

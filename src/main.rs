@@ -5,12 +5,26 @@ mod cost_explorer;
 mod dedup;
 mod telegram;
 
+use std::sync::LazyLock;
+
 use anyhow::Result;
+use aws_config::SdkConfig;
 use lambda_runtime::{Error, LambdaEvent, run, service_fn, tracing};
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
 use accounts::AccountContext;
+
+/// Cached AWS SDK config — loaded once on cold start, reused across warm invocations.
+/// Avoids redundant IMDS metadata calls (~5-20ms each) on every handler invocation.
+static BASE_CONFIG: LazyLock<tokio::sync::OnceCell<SdkConfig>> =
+    LazyLock::new(tokio::sync::OnceCell::new);
+
+async fn base_config() -> &'static SdkConfig {
+    BASE_CONFIG
+        .get_or_init(aws_config::load_from_env)
+        .await
+}
 
 /// Event payload from EventBridge (single-account) or Step Functions (per-account).
 #[derive(Deserialize, Default)]
@@ -51,16 +65,18 @@ async fn handler(event: LambdaEvent<SchedulerEvent>) -> Result<CheckResponse, Er
     let mode = payload.mode.as_deref().unwrap_or("spike");
     info!(request_id = %ctx.request_id, %mode, "StackAlert invocation started");
 
+    let base_cfg = base_config().await;
+
     let cfg = match &payload.account {
         // Multi-account: context injected by the dashboard's Step Functions
-        Some(account_ctx) => config::Config::from_account_context(account_ctx).await?,
+        Some(account_ctx) => config::Config::from_account_context(account_ctx, base_cfg).await?,
         // Single-account: read from env vars (open-source / self-hosted)
-        None => config::Config::load().await?,
+        None => config::Config::load(base_cfg).await?,
     };
 
     let result = match mode {
-        "digest" => run_digest(&cfg).await?,
-        _ => run_spike_check(&cfg).await?,
+        "digest" => run_digest(&cfg, base_cfg).await?,
+        _ => run_spike_check(&cfg, base_cfg).await?,
     };
 
     info!(
@@ -73,14 +89,10 @@ async fn handler(event: LambdaEvent<SchedulerEvent>) -> Result<CheckResponse, Er
     Ok(result)
 }
 
-async fn run_spike_check(cfg: &config::Config) -> Result<CheckResponse> {
-    // Load the Lambda's own credentials once — reused by Cost Explorer (single-account
-    // mode) and SSM (dedup state always lives in the Lambda's own account).
-    let base_cfg = aws_config::load_from_env().await;
-
+async fn run_spike_check(cfg: &config::Config, base_cfg: &aws_config::SdkConfig) -> Result<CheckResponse> {
     // Cost Explorer may use cross-account credentials; build_aws_config handles that.
     // Fetch history_days + 1 so we have `history_days` full historical days plus today.
-    let aws_cfg = cost_explorer::build_aws_config(cfg, &base_cfg).await?;
+    let aws_cfg = cost_explorer::build_aws_config(cfg, base_cfg).await?;
     let spend_data = cost_explorer::fetch_spend(&aws_cfg, cfg.history_days as i64 + 1).await?;
     let all_spikes = anomaly::detect_spikes(
         &spend_data,
@@ -91,7 +103,7 @@ async fn run_spike_check(cfg: &config::Config) -> Result<CheckResponse> {
 
     // Dedup uses the Lambda's own credentials — SSM state lives in the Lambda's account,
     // not in the customer account, so it works for both single and multi-account modes.
-    let ssm = aws_sdk_ssm::Client::new(&base_cfg);
+    let ssm = aws_sdk_ssm::Client::new(base_cfg);
 
     // Filter out services that were already alerted within the cooldown window.
     // Each service has an independent cooldown — a new spike on Service B is never
@@ -145,9 +157,8 @@ async fn run_spike_check(cfg: &config::Config) -> Result<CheckResponse> {
     })
 }
 
-async fn run_digest(cfg: &config::Config) -> Result<CheckResponse> {
-    let base_cfg = aws_config::load_from_env().await;
-    let aws_cfg = cost_explorer::build_aws_config(cfg, &base_cfg).await?;
+async fn run_digest(cfg: &config::Config, base_cfg: &aws_config::SdkConfig) -> Result<CheckResponse> {
+    let aws_cfg = cost_explorer::build_aws_config(cfg, base_cfg).await?;
     let spend_data = cost_explorer::fetch_spend(&aws_cfg, cfg.history_days as i64).await?;
 
     let alerts_sent = match telegram::send_daily_digest(
