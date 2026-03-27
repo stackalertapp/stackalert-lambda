@@ -7,6 +7,7 @@
     "schedule:weekly"
   ],
   "labels": ["dependencies"],
+  "minimumReleaseAge": "10 days",
   "packageRules": [
     {
       "matchManagers": ["cargo"],
