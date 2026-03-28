@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/stackalertapp/stackalert-lambda/actions/workflows/ci.yml/badge.svg)](https://github.com/stackalertapp/stackalert-lambda/actions/workflows/ci.yml)
 
-AWS cost spike detection Lambda written in Rust. Monitors your AWS spending and alerts you via Telegram when costs spike unexpectedly.
+AWS cost spike detection Lambda written in Rust. Monitors your AWS spending and alerts you when costs spike unexpectedly. Supports multiple notification channels: Telegram, Slack, Microsoft Teams, PagerDuty, email (SES), SNS, and custom webhooks.
 
 **Perfect for:**
 - Small teams monitoring their own AWS costs
@@ -11,11 +11,11 @@ AWS cost spike detection Lambda written in Rust. Monitors your AWS spending and 
 ## How It Works
 
 ```
-EventBridge (every 6h) → Lambda → Cost Explorer API → Spike Detection → Telegram Alert
-EventBridge (daily 8:00 UTC) → Lambda → Cost Explorer API → Daily Digest → Telegram Message
+EventBridge (every 6h) → Lambda → Cost Explorer API → Spike Detection → Notify (Telegram, Slack, ...)
+EventBridge (daily 8:00 UTC) → Lambda → Cost Explorer API → Daily Digest → Notify (Telegram, Slack, ...)
 ```
 
-The Lambda queries AWS Cost Explorer for daily spend grouped by service, compares today's spend against a 7-day rolling average, and sends a Telegram alert if any service exceeds the configured threshold (default: 50% above average).
+The Lambda queries AWS Cost Explorer for daily spend grouped by service, compares today's spend against a 7-day rolling average, and sends alerts to your configured notification channels if any service exceeds the configured threshold (default: 50% above average).
 
 ## What You Get: Per-Service Alerts
 
@@ -47,12 +47,12 @@ Total            $27.13
 
 | Tool | What it tells you | Delivery | Cost |
 |---|---|---|---|
-| **StackAlert** | Which service + by how much | Telegram (instant push) | ~$0/mo |
+| **StackAlert** | Which service + by how much | Telegram, Slack, Teams, PagerDuty, email, SNS, webhook | ~$0/mo |
 | AWS Budgets | Total bill crossed threshold | Email | Free |
 | Cost Anomaly Detection | Something looks unusual (ML) | Email | Free |
 | CloudZero / nOps | Everything | Slack/email | $500+/mo |
 
-AWS Budgets fires when you've already overspent. Cost Anomaly Detection needs 2–4 weeks of ML training. StackAlert fires on day 1 with a 50% default threshold, tells you the service by name, and lands in Telegram.
+AWS Budgets fires when you've already overspent. Cost Anomaly Detection needs 2–4 weeks of ML training. StackAlert fires on day 1 with a 50% default threshold, tells you the service by name, and delivers to your channel of choice.
 
 ## Features
 
@@ -60,9 +60,52 @@ AWS Budgets fires when you've already overspent. Cost Anomaly Detection needs 2�
 - **Daily Digest**: Optional daily summary of your top AWS services by cost
 - **New Service Detection**: Flags services that appear for the first time with significant spend (>$1)
 - **Noise Filtering**: Ignores services with <$0.10/day average to reduce alert fatigue
+- **Multi-Channel Notifications**: Send alerts to one or more channels simultaneously — Telegram, Slack, Teams, PagerDuty, email (SES), SNS, or a custom webhook
 - **Cross-Account Support**: Optionally assume an IAM role to monitor a different AWS account
-- **Secure**: Telegram bot token stored in SSM Parameter Store (encrypted)
+- **Secure**: Secrets stored in SSM Parameter Store (encrypted)
 - **Fast & Cheap**: Rust on ARM64 (Graviton) — sub-100ms cold start, minimal memory
+
+## Notification Channels
+
+StackAlert supports multiple notification channels that can run simultaneously. Set `NOTIFY_CHANNELS` to a comma-separated list (default: `telegram`).
+
+| Channel | Feature Flag | Secrets / Config | Notes |
+|---------|-------------|-----------------|-------|
+| **Telegram** | `telegram` (default) | `TELEGRAM_BOT_TOKEN_SSM_PARAM` (SSM), `TELEGRAM_CHAT_ID` (env) | Bot token stored in SSM Parameter Store |
+| **Slack** | `slack` | `SLACK_WEBHOOK_URL_SSM_PARAM` (SSM) | Uses Slack incoming webhooks |
+| **Microsoft Teams** | `teams` | `TEAMS_WEBHOOK_URL_SSM_PARAM` (SSM) | Sends Adaptive Cards |
+| **PagerDuty** | `pagerduty` | `PAGERDUTY_ROUTING_KEY_SSM_PARAM` (SSM) | Spike alerts only (digests skipped — not incidents) |
+| **Email (SES)** | `ses` | `SES_FROM_ADDRESS`, `SES_TO_ADDRESSES` (env) | Comma-separated recipient list; requires verified SES identities |
+| **SNS** | `sns` | `SNS_TOPIC_ARN` (env) | Publishes to any SNS topic (email, SMS, Lambda, etc.) |
+| **Webhook** | `webhook` | `WEBHOOK_URL_SSM_PARAM` (SSM) or `WEBHOOK_URL` (env), optional `WEBHOOK_AUTH_HEADER_SSM_PARAM` (SSM) | JSON payload with structured spike/digest data |
+
+### Compile-time feature flags
+
+Each channel is a Cargo feature flag. Only enabled channels are compiled into the binary, keeping it small.
+
+```bash
+# Default (Telegram only)
+cargo build --release
+
+# Telegram + Slack
+cargo build --release --features telegram,slack
+
+# All channels
+cargo build --release --features all-channels
+```
+
+### Example: multiple channels
+
+```bash
+# Environment variables
+NOTIFY_CHANNELS=telegram,slack,pagerduty
+TELEGRAM_BOT_TOKEN_SSM_PARAM=/stackalert/telegram-bot-token
+TELEGRAM_CHAT_ID=-100123456789
+SLACK_WEBHOOK_URL_SSM_PARAM=/stackalert/slack-webhook-url
+PAGERDUTY_ROUTING_KEY_SSM_PARAM=/stackalert/pagerduty-routing-key
+```
+
+Alerts fan out to all configured channels concurrently. A failure in one channel does not block the others.
 
 ## Deployment
 
@@ -85,7 +128,7 @@ Deploy using one of the official IaC modules:
 # Install cross-compilation target
 rustup target add aarch64-unknown-linux-musl
 
-# Build
+# Build (add --features as needed, e.g. --features all-channels)
 cargo build --release --target aarch64-unknown-linux-musl
 
 # Package
@@ -94,7 +137,7 @@ cp target/aarch64-unknown-linux-musl/release/bootstrap dist/bootstrap
 cd dist && zip lambda.zip bootstrap
 ```
 
-2. **Store your Telegram bot token in SSM:**
+2. **Store secrets in SSM:**
 
 ```bash
 aws ssm put-parameter \
@@ -107,10 +150,13 @@ aws ssm put-parameter \
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `TELEGRAM_BOT_TOKEN_SSM_PARAM` | Yes | SSM parameter name (e.g., `/stackalert/telegram-bot-token`) |
-| `TELEGRAM_CHAT_ID` | Yes | Telegram chat ID for alerts |
+| `NOTIFY_CHANNELS` | No | Comma-separated channel list (default: `telegram`). See [Notification Channels](#notification-channels) |
 | `SPIKE_THRESHOLD_PCT` | No | Spike threshold percentage (default: `50`) |
 | `CROSS_ACCOUNT_ROLE_ARN` | No | IAM role ARN for cross-account monitoring |
+| `TELEGRAM_BOT_TOKEN_SSM_PARAM` | If using Telegram | SSM parameter name for the bot token |
+| `TELEGRAM_CHAT_ID` | If using Telegram | Telegram chat ID for alerts |
+
+See the [Notification Channels](#notification-channels) table for channel-specific variables.
 
 4. **Create EventBridge rules:**
 
@@ -134,7 +180,8 @@ The Lambda execution role needs:
 {
   "Effect": "Allow",
   "Action": [
-    "ssm:GetParameter"
+    "ssm:GetParameter",
+    "ssm:PutParameter"
   ],
   "Resource": "arn:aws:ssm:*:*:parameter/stackalert/*"
 }
@@ -147,6 +194,21 @@ For cross-account mode, add:
   "Effect": "Allow",
   "Action": "sts:AssumeRole",
   "Resource": "arn:aws:iam::MONITORED_ACCOUNT:role/StackAlertReadOnly"
+}
+```
+
+For SES or SNS channels, add the relevant permissions:
+
+```json
+{
+  "Effect": "Allow",
+  "Action": "ses:SendEmail",
+  "Resource": "*"
+},
+{
+  "Effect": "Allow",
+  "Action": "sns:Publish",
+  "Resource": "arn:aws:sns:*:*:your-topic-name"
 }
 ```
 

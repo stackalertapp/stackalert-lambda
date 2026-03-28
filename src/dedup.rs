@@ -81,7 +81,7 @@ pub async fn filter_new_spikes(
 }
 
 /// Write the current timestamp to SSM for each alerted spike.
-/// Called after a Telegram message is successfully sent.
+/// Called after at least one notification channel successfully sent.
 ///
 /// All SSM PutParameter calls are issued concurrently.
 /// Failures are logged as warnings but do NOT abort the invocation.
@@ -135,7 +135,13 @@ async fn fetch_timestamp(ssm: &SsmClient, key: &str) -> Option<i64> {
 fn ssm_key(namespace: &str, service: &str) -> String {
     let safe_ns: String = namespace
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     let safe_service: String = service
         .chars()

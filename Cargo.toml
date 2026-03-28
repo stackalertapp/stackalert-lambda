@@ -11,6 +11,17 @@ repository = "https://github.com/stackalertapp/stackalert-lambda"
 name = "bootstrap"
 path = "src/main.rs"
 
+[features]
+default = ["telegram"]
+telegram = []
+slack = []
+teams = []
+pagerduty = []
+webhook = []
+ses = ["dep:aws-sdk-ses"]
+sns = ["dep:aws-sdk-sns"]
+all-channels = ["telegram", "slack", "teams", "pagerduty", "webhook", "ses", "sns"]
+
 [dependencies]
 # AWS Lambda runtime
 lambda_runtime = "1.0"
@@ -21,11 +32,16 @@ aws-sdk-costexplorer = "1"
 aws-sdk-ssm = "1"
 aws-sdk-sts = "1"
 aws-credential-types = { version = "1", features = ["hardcoded-credentials"] }
+aws-sdk-ses = { version = "1", optional = true }
+aws-sdk-sns = { version = "1", optional = true }
 
 # Async runtime
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
 
-# HTTP client for Telegram API
+# Async utilities (join_all for concurrent channel fan-out)
+futures-util = "0.3"
+
+# HTTP client for webhook-based notification channels
 reqwest = { version = "0.13", features = ["json", "rustls"], default-features = false }
 
 # Serialization

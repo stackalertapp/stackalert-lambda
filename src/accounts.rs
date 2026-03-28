@@ -27,5 +27,9 @@ pub struct AccountContext {
     #[serde(rename = "telegramChatId")]
     pub telegram_chat_id: Option<String>,
 
+    /// Override NOTIFY_CHANNELS per account (comma-separated).
+    #[serde(rename = "notifyChannels", default)]
+    pub notify_channels: Option<String>,
+
     pub region: String,
 }

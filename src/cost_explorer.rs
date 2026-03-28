@@ -46,7 +46,9 @@ pub async fn build_aws_config(cfg: &Config, base_cfg: &SdkConfig) -> Result<SdkC
             // Ensure us-east-1 for Cost Explorer
             let creds = base_cfg
                 .credentials_provider()
-                .context("No credentials provider in base AWS config — check Lambda execution role")?
+                .context(
+                    "No credentials provider in base AWS config — check Lambda execution role",
+                )?
                 .clone();
             let ce_cfg = aws_config::defaults(aws_config::BehaviorVersion::latest())
                 .credentials_provider(creds)

@@ -3,7 +3,7 @@ mod anomaly;
 mod config;
 mod cost_explorer;
 mod dedup;
-mod telegram;
+mod notify;
 
 use std::sync::LazyLock;
 
@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use tracing::info;
 
 use accounts::AccountContext;
+use notify::NotifyChannel;
 
 /// Cached AWS SDK config — loaded once on cold start, reused across warm invocations.
 /// Avoids redundant IMDS metadata calls (~5-20ms each) on every handler invocation.
@@ -21,9 +22,7 @@ static BASE_CONFIG: LazyLock<tokio::sync::OnceCell<SdkConfig>> =
     LazyLock::new(tokio::sync::OnceCell::new);
 
 async fn base_config() -> &'static SdkConfig {
-    BASE_CONFIG
-        .get_or_init(aws_config::load_from_env)
-        .await
+    BASE_CONFIG.get_or_init(aws_config::load_from_env).await
 }
 
 /// Event payload from EventBridge (single-account) or Step Functions (per-account).
@@ -68,15 +67,15 @@ async fn handler(event: LambdaEvent<SchedulerEvent>) -> Result<CheckResponse, Er
     let base_cfg = base_config().await;
 
     let cfg = match &payload.account {
-        // Multi-account: context injected by the dashboard's Step Functions
         Some(account_ctx) => config::Config::from_account_context(account_ctx, base_cfg).await?,
-        // Single-account: read from env vars (open-source / self-hosted)
         None => config::Config::load(base_cfg).await?,
     };
 
+    let channels = notify::build_channels(&cfg, base_cfg);
+
     let result = match mode {
-        "digest" => run_digest(&cfg, base_cfg).await?,
-        _ => run_spike_check(&cfg, base_cfg).await?,
+        "digest" => run_digest(&cfg, base_cfg, &channels).await?,
+        _ => run_spike_check(&cfg, base_cfg, &channels).await?,
     };
 
     info!(
@@ -89,9 +88,11 @@ async fn handler(event: LambdaEvent<SchedulerEvent>) -> Result<CheckResponse, Er
     Ok(result)
 }
 
-async fn run_spike_check(cfg: &config::Config, base_cfg: &aws_config::SdkConfig) -> Result<CheckResponse> {
-    // Cost Explorer may use cross-account credentials; build_aws_config handles that.
-    // Fetch history_days + 1 so we have `history_days` full historical days plus today.
+async fn run_spike_check(
+    cfg: &config::Config,
+    base_cfg: &SdkConfig,
+    channels: &[Box<dyn NotifyChannel>],
+) -> Result<CheckResponse> {
     let aws_cfg = cost_explorer::build_aws_config(cfg, base_cfg).await?;
     let spend_data = cost_explorer::fetch_spend(&aws_cfg, cfg.history_days as i64 + 1).await?;
     let all_spikes = anomaly::detect_spikes(
@@ -101,13 +102,8 @@ async fn run_spike_check(cfg: &config::Config, base_cfg: &aws_config::SdkConfig)
         cfg.min_avg_daily_usd,
     );
 
-    // Dedup uses the Lambda's own credentials — SSM state lives in the Lambda's account,
-    // not in the customer account, so it works for both single and multi-account modes.
     let ssm = aws_sdk_ssm::Client::new(base_cfg);
 
-    // Filter out services that were already alerted within the cooldown window.
-    // Each service has an independent cooldown — a new spike on Service B is never
-    // suppressed by an ongoing alert on Service A.
     let spikes_found = all_spikes.len();
     let new_spikes = dedup::filter_new_spikes(
         &ssm,
@@ -126,16 +122,17 @@ async fn run_spike_check(cfg: &config::Config, base_cfg: &aws_config::SdkConfig)
 
     let mut alerts_sent = 0;
     if !new_spikes.is_empty() {
-        match telegram::send_spike_alert(cfg, &new_spikes)
-        .await
-        {
-            Ok(true) => {
-                alerts_sent = 1;
-                // Record the alert time so we don't re-alert within the cooldown window.
-                dedup::mark_alerted(&ssm, &new_spikes, &cfg.account_namespace).await;
+        let results = notify::fan_out_spike_alert(channels, cfg, &new_spikes).await;
+        alerts_sent = results.iter().filter(|r| r.sent).count();
+
+        if alerts_sent > 0 {
+            dedup::mark_alerted(&ssm, &new_spikes, &cfg.account_namespace).await;
+        }
+
+        for r in &results {
+            if let Some(ref e) = r.error {
+                tracing::warn!(channel = r.channel, error = %e, "Channel failed");
             }
-            Ok(false) => tracing::warn!("Telegram message not sent (API returned non-2xx)"),
-            Err(e) => tracing::warn!(error = %e, "Telegram send failed — continuing"),
         }
     } else if spikes_found > 0 {
         info!(
@@ -153,19 +150,22 @@ async fn run_spike_check(cfg: &config::Config, base_cfg: &aws_config::SdkConfig)
     })
 }
 
-async fn run_digest(cfg: &config::Config, base_cfg: &aws_config::SdkConfig) -> Result<CheckResponse> {
+async fn run_digest(
+    cfg: &config::Config,
+    base_cfg: &SdkConfig,
+    channels: &[Box<dyn NotifyChannel>],
+) -> Result<CheckResponse> {
     let aws_cfg = cost_explorer::build_aws_config(cfg, base_cfg).await?;
     let spend_data = cost_explorer::fetch_spend(&aws_cfg, cfg.history_days as i64).await?;
 
-    let alerts_sent = match telegram::send_daily_digest(cfg, &spend_data)
-    .await
-    {
-        Ok(sent) => sent as usize,
-        Err(e) => {
-            tracing::warn!(error = %e, "Telegram digest send failed — continuing");
-            0
+    let results = notify::fan_out_daily_digest(channels, cfg, &spend_data).await;
+    let alerts_sent = results.iter().filter(|r| r.sent).count();
+
+    for r in &results {
+        if let Some(ref e) = r.error {
+            tracing::warn!(channel = r.channel, error = %e, "Channel digest failed");
         }
-    };
+    }
 
     Ok(CheckResponse {
         mode: "digest".to_string(),

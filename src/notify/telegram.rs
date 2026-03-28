@@ -1,55 +1,70 @@
-use crate::anomaly::Spike;
-use crate::config::Config;
-use crate::cost_explorer::SpendHistory;
+use std::future::Future;
+use std::pin::Pin;
+
 use anyhow::{Context, Result};
-use reqwest::Client;
-use std::sync::OnceLock;
-use std::time::Duration;
 use tracing::{info, warn};
+
+use super::{NotifyChannel, escape_html, fmt_pct, ranked_services, shared_http_client};
+use crate::anomaly::Spike;
+use crate::config::{Config, TelegramConfig};
+use crate::cost_explorer::SpendHistory;
 
 const TELEGRAM_API: &str = "https://api.telegram.org";
 
-/// Module-level HTTP client — reused across Lambda warm invocations.
-/// Initialised on first call with timeout values from `Config`.
-static HTTP_CLIENT: OnceLock<Client> = OnceLock::new();
+pub struct Telegram;
 
-fn http_client(cfg: &Config) -> &Client {
-    HTTP_CLIENT.get_or_init(|| {
-        Client::builder()
-            .timeout(Duration::from_secs(cfg.telegram_timeout_secs))
-            .connect_timeout(Duration::from_secs(cfg.telegram_connect_timeout_secs))
-            .build()
-            .expect("Failed to build HTTP client")
-    })
-}
-
-/// Send a Telegram alert when cost spikes are detected.
-/// Returns true if the message was sent successfully.
-pub async fn send_spike_alert(cfg: &Config, spikes: &[Spike]) -> Result<bool> {
-    if spikes.is_empty() {
-        return Ok(false);
+impl NotifyChannel for Telegram {
+    fn name(&self) -> &'static str {
+        "telegram"
     }
 
-    let text = build_spike_message(spikes, cfg.dedup_cooldown_hours, cfg.max_spike_display);
-    send_message(cfg, &text).await
+    fn send_spike_alert<'a>(
+        &'a self,
+        cfg: &'a Config,
+        spikes: &'a [Spike],
+    ) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + 'a>> {
+        Box::pin(async move {
+            if spikes.is_empty() {
+                return Ok(false);
+            }
+            let tcfg = cfg
+                .telegram
+                .as_ref()
+                .context("Telegram channel active but config missing")?;
+            let text = build_spike_message(spikes, cfg.dedup_cooldown_hours, cfg.max_spike_display);
+            send_telegram(cfg, tcfg, &text).await
+        })
+    }
+
+    fn send_daily_digest<'a>(
+        &'a self,
+        cfg: &'a Config,
+        spend_data: &'a SpendHistory,
+    ) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + 'a>> {
+        Box::pin(async move {
+            let tcfg = cfg
+                .telegram
+                .as_ref()
+                .context("Telegram channel active but config missing")?;
+            let text =
+                build_digest_message(spend_data, cfg.min_avg_daily_usd, cfg.max_digest_display);
+            send_telegram(cfg, tcfg, &text).await
+        })
+    }
 }
 
-/// Send a daily cost digest via Telegram.
-pub async fn send_daily_digest(cfg: &Config, spend_data: &SpendHistory) -> Result<bool> {
-    let text = build_digest_message(spend_data, cfg.min_avg_daily_usd, cfg.max_digest_display);
-    send_message(cfg, &text).await
-}
+// ── HTTP send ───────────────────────────────────────────────────────────────
 
-async fn send_message(cfg: &Config, text: &str) -> Result<bool> {
+async fn send_telegram(cfg: &Config, tcfg: &TelegramConfig, text: &str) -> Result<bool> {
     // NOTE: Telegram requires the bot token in the URL path — there is no header-based
-    // alternative.  Never log `url` or the request object; doing so would leak the token
-    // into CloudWatch.  All tracing statements in this function intentionally omit it.
-    let url = format!("{TELEGRAM_API}/bot{}/sendMessage", cfg.telegram_bot_token);
+    // alternative. Never log `url` or the request object; doing so would leak the token
+    // into CloudWatch. All tracing statements in this function intentionally omit it.
+    let url = format!("{TELEGRAM_API}/bot{}/sendMessage", tcfg.bot_token);
 
-    let resp = http_client(cfg)
+    let resp = shared_http_client(cfg)
         .post(&url)
         .json(&serde_json::json!({
-            "chat_id": cfg.telegram_chat_id,
+            "chat_id": tcfg.chat_id,
             "text": text,
             "parse_mode": "HTML",
             "disable_web_page_preview": true,
@@ -71,21 +86,18 @@ async fn send_message(cfg: &Config, text: &str) -> Result<bool> {
     }
 }
 
+// ── Message formatting ──────────────────────────────────────────────────────
+
 fn build_spike_message(spikes: &[Spike], check_interval_hours: u32, max_display: usize) -> String {
+    assert!(!spikes.is_empty(), "build_spike_message called with empty spikes");
     let total_extra: f64 = spikes.iter().map(|s| s.extra_usd).sum();
     let top_spike = &spikes[0];
 
     let mut msg = String::from("⚠️ <b>AWS Cost Spike Detected</b>\n\n");
-
-    let pct_str = if top_spike.pct_increase.is_infinite() {
-        "NEW".to_string()
-    } else {
-        format!("+{:.0}%", top_spike.pct_increase)
-    };
     msg.push_str(&format!(
         "🔝 <b>{}</b> spiked {} (${:.2} today vs ${:.2}/day avg)\n",
         escape_html(&top_spike.service),
-        pct_str,
+        fmt_pct(top_spike.pct_increase),
         top_spike.today,
         top_spike.avg_daily,
     ));
@@ -93,15 +105,10 @@ fn build_spike_message(spikes: &[Spike], check_interval_hours: u32, max_display:
 
     msg.push_str("<b>Affected services:</b>\n");
     for spike in spikes.iter().take(max_display) {
-        let pct = if spike.pct_increase.is_infinite() {
-            "NEW".to_string()
-        } else {
-            format!("+{:.0}%", spike.pct_increase)
-        };
         msg.push_str(&format!(
             "• <b>{}</b>  {} (${:.2} today vs ${:.2} avg)\n",
             escape_html(&spike.service),
-            pct,
+            fmt_pct(spike.pct_increase),
             spike.today,
             spike.avg_daily,
         ));
@@ -120,35 +127,21 @@ fn build_spike_message(spikes: &[Spike], check_interval_hours: u32, max_display:
     msg
 }
 
-fn build_digest_message(spend_data: &SpendHistory, min_avg_daily: f64, max_display: usize) -> String {
+fn build_digest_message(
+    spend_data: &SpendHistory,
+    min_avg_daily: f64,
+    max_display: usize,
+) -> String {
+    let (services, grand_total) = ranked_services(spend_data, min_avg_daily);
+
     let mut msg = String::from("📊 <b>Daily AWS Cost Digest</b>\n\n");
-
-    let mut services: Vec<(String, f64, f64)> = spend_data
-        .iter()
-        .map(|(service, costs)| {
-            let total: f64 = costs.iter().sum();
-            let avg = if !costs.is_empty() {
-                total / costs.len() as f64
-            } else {
-                0.0
-            };
-            (service.clone(), avg, total)
-        })
-        .filter(|(_, avg, _)| *avg >= min_avg_daily)
-        .collect();
-
-    // total_cmp handles NaN without panicking (NaN sorts last).
-    services.sort_by(|a, b| b.1.total_cmp(&a.1));
-
-    let grand_total_daily: f64 = services.iter().map(|(_, avg, _)| avg).sum();
-
     msg.push_str(&format!(
         "💰 Avg daily spend: <b>${:.2}</b>\n\n",
-        grand_total_daily
+        grand_total
     ));
 
     msg.push_str("<b>Top services (avg/day):</b>\n");
-    for (service, avg, _) in services.iter().take(max_display) {
+    for (service, avg) in services.iter().take(max_display) {
         msg.push_str(&format!("• {} — ${:.2}/day\n", escape_html(service), avg));
     }
 
@@ -163,16 +156,11 @@ fn build_digest_message(spend_data: &SpendHistory, min_avg_daily: f64, max_displ
     msg
 }
 
-fn escape_html(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-}
-
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::collections::HashMap;
+
+    use super::*;
 
     #[test]
     fn test_spike_message_format() {
