@@ -31,7 +31,7 @@ impl NotifyChannel for PagerDuty {
                 .pagerduty
                 .as_ref()
                 .context("PagerDuty channel active but config missing")?;
-            let summary = build_summary(spikes, cfg.max_spike_display);
+            let summary = build_summary(spikes, &cfg.setup_name, cfg.max_spike_display);
             send_event(cfg, pcfg, &summary).await
         })
     }
@@ -82,13 +82,13 @@ async fn send_event(cfg: &Config, pcfg: &PagerDutyConfig, summary: &str) -> Resu
     }
 }
 
-fn build_summary(spikes: &[Spike], max_display: usize) -> String {
+fn build_summary(spikes: &[Spike], setup_name: &str, max_display: usize) -> String {
     assert!(!spikes.is_empty(), "build_summary called with empty spikes");
     let total_extra: f64 = spikes.iter().map(|s| s.extra_usd).sum();
     let top = &spikes[0];
 
     let mut summary = format!(
-        "AWS Cost Spike: {} spiked ${:.2} (${:.2} extra). ",
+        "{setup_name}: {} spiked ${:.2} (${:.2} extra). ",
         top.service, top.today, top.extra_usd,
     );
 
@@ -119,7 +119,8 @@ mod tests {
             pct_increase: 316.67,
             extra_usd: 57.0,
         }];
-        let summary = build_summary(&spikes, 5);
+        let summary = build_summary(&spikes, "StackAlert", 5);
+        assert!(summary.contains("StackAlert:"));
         assert!(summary.contains("Amazon EC2"));
         assert!(summary.contains("$75.00"));
         assert!(summary.contains("$57.00"));
@@ -144,7 +145,7 @@ mod tests {
                 extra_usd: 15.0,
             },
         ];
-        let summary = build_summary(&spikes, 5);
+        let summary = build_summary(&spikes, "StackAlert", 5);
         assert!(summary.contains("Also: Amazon RDS"));
         assert!(summary.contains("$72.00")); // total extra
     }

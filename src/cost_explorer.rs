@@ -1,10 +1,8 @@
 use anyhow::{Context, Result};
 use aws_config::{Region, SdkConfig};
-use aws_credential_types::Credentials as AwsCredentials;
 use aws_sdk_costexplorer::types::{
     DateInterval, Granularity, GroupDefinition, GroupDefinitionType,
 };
-use aws_sdk_sts::types::Credentials as StsCredentials;
 use chrono::{Duration, NaiveDate, Utc};
 use std::collections::HashMap;
 use tracing::{debug, info};
@@ -16,6 +14,7 @@ use crate::config::Config;
 pub const MIN_COST_THRESHOLD: f64 = 0.01;
 
 /// STS AssumeRole session duration in seconds (minimum allowed by AWS).
+#[cfg(feature = "cross-account")]
 const STS_SESSION_DURATION_SECS: i32 = 900;
 
 /// Daily spend per service: { "Amazon EC2": [18.40, 19.20, ...] }
@@ -30,43 +29,50 @@ pub type SpendHistory = HashMap<String, Vec<f64>>;
 /// which is also used by SSM and other services — passing it in avoids a
 /// redundant `load_from_env()` call per invocation.
 pub async fn build_aws_config(cfg: &Config, base_cfg: &SdkConfig) -> Result<SdkConfig> {
-    match &cfg.cross_account_role_arn {
-        Some(role_arn) => {
-            info!(%role_arn, "Using cross-account mode");
-            assume_role(
-                base_cfg,
-                role_arn,
-                "stackalert-check",
-                cfg.external_id.as_deref(),
-            )
-            .await
-        }
-        None => {
-            info!("Using single-account mode (Lambda's own credentials)");
-            // Ensure us-east-1 for Cost Explorer
-            let creds = base_cfg
-                .credentials_provider()
-                .context(
-                    "No credentials provider in base AWS config — check Lambda execution role",
-                )?
-                .clone();
-            let ce_cfg = aws_config::defaults(aws_config::BehaviorVersion::latest())
-                .credentials_provider(creds)
-                .region(Region::new("us-east-1"))
-                .load()
-                .await;
-            Ok(ce_cfg)
-        }
+    #[cfg(feature = "cross-account")]
+    if let Some(role_arn) = &cfg.cross_account_role_arn {
+        info!(%role_arn, "Using cross-account mode");
+        return assume_role(
+            base_cfg,
+            role_arn,
+            "stackalert-check",
+            cfg.external_id.as_deref(),
+        )
+        .await;
     }
+
+    #[cfg(not(feature = "cross-account"))]
+    if cfg.cross_account_role_arn.is_some() {
+        anyhow::bail!(
+            "cross_account_role_arn is set but the binary was compiled without the \
+             'cross-account' feature — rebuild with --features cross-account"
+        );
+    }
+
+    info!("Using single-account mode (Lambda's own credentials)");
+    let creds = base_cfg
+        .credentials_provider()
+        .context("No credentials provider in base AWS config — check Lambda execution role")?
+        .clone();
+    let ce_cfg = aws_config::defaults(aws_config::BehaviorVersion::latest())
+        .credentials_provider(creds)
+        .region(Region::new("us-east-1"))
+        .load()
+        .await;
+    Ok(ce_cfg)
 }
 
-/// Assume a cross-account IAM role and return AWS config for that account
+/// Assume a cross-account IAM role and return AWS config for that account.
+#[cfg(feature = "cross-account")]
 async fn assume_role(
     base_cfg: &SdkConfig,
     role_arn: &str,
     session_name: &str,
     external_id: Option<&str>,
 ) -> Result<SdkConfig> {
+    use aws_credential_types::Credentials as AwsCredentials;
+    use aws_sdk_sts::types::Credentials as StsCredentials;
+
     let sts = aws_sdk_sts::Client::new(base_cfg);
 
     let mut req = sts

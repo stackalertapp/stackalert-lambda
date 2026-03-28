@@ -52,6 +52,24 @@ pub(crate) fn escape_html(s: &str) -> String {
         .replace('>', "&gt;")
 }
 
+/// Escape Slack mrkdwn special characters so user-supplied text
+/// (e.g. `setup_name`) cannot break formatting.
+#[cfg(feature = "slack")]
+pub(crate) fn escape_mrkdwn(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '*' | '_' | '~' | '`' | '>' => {
+                // Zero-width space breaks mrkdwn parsing
+                out.push('\u{200B}');
+                out.push(c);
+            }
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
 /// Compute sorted (descending by avg) services above the noise floor, plus grand total.
 pub(crate) fn ranked_services(
     spend_data: &SpendHistory,

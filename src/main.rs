@@ -1,4 +1,3 @@
-mod accounts;
 mod anomaly;
 mod config;
 mod cost_explorer;
@@ -13,7 +12,6 @@ use lambda_runtime::{Error, LambdaEvent, run, service_fn, tracing};
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
-use accounts::AccountContext;
 use notify::NotifyChannel;
 
 /// Cached AWS SDK config — loaded once on cold start, reused across warm invocations.
@@ -25,16 +23,45 @@ async fn base_config() -> &'static SdkConfig {
     BASE_CONFIG.get_or_init(aws_config::load_from_env).await
 }
 
-/// Event payload from EventBridge (single-account) or Step Functions (per-account).
+/// Event payload from EventBridge or Step Functions.
+///
+/// All fields except `mode` are optional overrides. When absent, env vars are used.
+/// This allows the dashboard to pass per-account config via Step Functions while
+/// self-hosted deployments rely entirely on env vars.
 #[derive(Deserialize, Default)]
 struct SchedulerEvent {
     /// "spike" (default) or "digest"
     #[serde(default)]
     mode: Option<String>,
 
-    /// Populated by the dashboard's Step Functions Map state for multi-account mode.
-    /// Absent in single-account / open-source mode — config is read from env vars instead.
-    account: Option<AccountContext>,
+    // ── Cross-account fields ───────────────────────────────────────────
+    /// IAM role ARN to assume for cross-account Cost Explorer access.
+    role_arn: Option<String>,
+    /// ExternalId for confused-deputy protection.
+    external_id: Option<String>,
+    /// Target AWS account ID — used as dedup namespace.
+    account_id: Option<String>,
+
+    // ── Config overrides (take precedence over env vars) ───────────────
+    spike_threshold_pct: Option<f64>,
+    notify_channels: Option<String>,
+    telegram_chat_id: Option<String>,
+    /// Human-readable name shown in alert messages.
+    setup_name: Option<String>,
+}
+
+impl From<SchedulerEvent> for config::EventOverrides {
+    fn from(e: SchedulerEvent) -> Self {
+        Self {
+            role_arn: e.role_arn,
+            external_id: e.external_id,
+            account_id: e.account_id,
+            spike_threshold_pct: e.spike_threshold_pct,
+            notify_channels: e.notify_channels,
+            telegram_chat_id: e.telegram_chat_id,
+            setup_name: e.setup_name,
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -61,19 +88,16 @@ async fn main() -> Result<(), Error> {
 
 async fn handler(event: LambdaEvent<SchedulerEvent>) -> Result<CheckResponse, Error> {
     let (payload, ctx) = event.into_parts();
-    let mode = payload.mode.as_deref().unwrap_or("spike");
+    let mode = payload.mode.as_deref().unwrap_or("spike").to_string();
     info!(request_id = %ctx.request_id, %mode, "StackAlert invocation started");
 
     let base_cfg = base_config().await;
-
-    let cfg = match &payload.account {
-        Some(account_ctx) => config::Config::from_account_context(account_ctx, base_cfg).await?,
-        None => config::Config::load(base_cfg).await?,
-    };
+    let overrides: config::EventOverrides = payload.into();
+    let cfg = config::Config::load(base_cfg, &overrides).await?;
 
     let channels = notify::build_channels(&cfg, base_cfg);
 
-    let result = match mode {
+    let result = match mode.as_str() {
         "digest" => run_digest(&cfg, base_cfg, &channels).await?,
         _ => run_spike_check(&cfg, base_cfg, &channels).await?,
     };

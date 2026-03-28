@@ -31,7 +31,12 @@ impl NotifyChannel for Telegram {
                 .telegram
                 .as_ref()
                 .context("Telegram channel active but config missing")?;
-            let text = build_spike_message(spikes, cfg.dedup_cooldown_hours, cfg.max_spike_display);
+            let text = build_spike_message(
+                spikes,
+                &cfg.setup_name,
+                cfg.dedup_cooldown_hours,
+                cfg.max_spike_display,
+            );
             send_telegram(cfg, tcfg, &text).await
         })
     }
@@ -46,8 +51,12 @@ impl NotifyChannel for Telegram {
                 .telegram
                 .as_ref()
                 .context("Telegram channel active but config missing")?;
-            let text =
-                build_digest_message(spend_data, cfg.min_avg_daily_usd, cfg.max_digest_display);
+            let text = build_digest_message(
+                spend_data,
+                &cfg.setup_name,
+                cfg.min_avg_daily_usd,
+                cfg.max_digest_display,
+            );
             send_telegram(cfg, tcfg, &text).await
         })
     }
@@ -78,22 +87,27 @@ async fn send_telegram(cfg: &Config, tcfg: &TelegramConfig, text: &str) -> Resul
         Ok(true)
     } else {
         let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
         warn!(%status, "Telegram API returned non-2xx");
-        // Don't log body — may contain sensitive token info in error messages
-        let _ = body;
         Ok(false)
     }
 }
 
 // ── Message formatting ──────────────────────────────────────────────────────
 
-fn build_spike_message(spikes: &[Spike], check_interval_hours: u32, max_display: usize) -> String {
+fn build_spike_message(
+    spikes: &[Spike],
+    setup_name: &str,
+    check_interval_hours: u32,
+    max_display: usize,
+) -> String {
     assert!(!spikes.is_empty(), "build_spike_message called with empty spikes");
     let total_extra: f64 = spikes.iter().map(|s| s.extra_usd).sum();
     let top_spike = &spikes[0];
 
-    let mut msg = String::from("⚠️ <b>AWS Cost Spike Detected</b>\n\n");
+    let mut msg = format!(
+        "⚠️ <b>{}: Cost Spike Detected</b>\n\n",
+        escape_html(setup_name)
+    );
     msg.push_str(&format!(
         "🔝 <b>{}</b> spiked {} (${:.2} today vs ${:.2}/day avg)\n",
         escape_html(&top_spike.service),
@@ -122,19 +136,24 @@ fn build_spike_message(spikes: &[Spike], check_interval_hours: u32, max_display:
     }
 
     msg.push_str(&format!(
-        "\n🔔 StackAlert · Checks every {check_interval_hours}h"
+        "\n🔔 {} · Checks every {check_interval_hours}h",
+        escape_html(setup_name)
     ));
     msg
 }
 
 fn build_digest_message(
     spend_data: &SpendHistory,
+    setup_name: &str,
     min_avg_daily: f64,
     max_display: usize,
 ) -> String {
     let (services, grand_total) = ranked_services(spend_data, min_avg_daily);
 
-    let mut msg = String::from("📊 <b>Daily AWS Cost Digest</b>\n\n");
+    let mut msg = format!(
+        "📊 <b>{}: Daily Digest</b>\n\n",
+        escape_html(setup_name)
+    );
     msg.push_str(&format!(
         "💰 Avg daily spend: <b>${:.2}</b>\n\n",
         grand_total
@@ -152,7 +171,10 @@ fn build_digest_message(
         ));
     }
 
-    msg.push_str("\n📅 StackAlert Daily Digest");
+    msg.push_str(&format!(
+        "\n📅 {} Daily Digest",
+        escape_html(setup_name)
+    ));
     msg
 }
 
@@ -180,8 +202,8 @@ mod tests {
                 extra_usd: 15.0,
             },
         ];
-        let msg = build_spike_message(&spikes, 6, 5);
-        assert!(msg.contains("AWS Cost Spike Detected"));
+        let msg = build_spike_message(&spikes, "StackAlert", 6, 5);
+        assert!(msg.contains("StackAlert: Cost Spike Detected"));
         assert!(msg.contains("Amazon EC2"));
         assert!(msg.contains("Amazon RDS"));
         assert!(msg.contains("+317%"));
@@ -196,7 +218,7 @@ mod tests {
             pct_increase: f64::INFINITY,
             extra_usd: 45.0,
         }];
-        let msg = build_spike_message(&spikes, 6, 5);
+        let msg = build_spike_message(&spikes, "StackAlert", 6, 5);
         assert!(msg.contains("NEW"));
         assert!(msg.contains("SageMaker"));
     }
@@ -212,8 +234,8 @@ mod tests {
             "Amazon S3".to_string(),
             vec![0.50, 0.45, 0.55, 0.48, 0.52, 0.47, 0.53],
         );
-        let msg = build_digest_message(&spend_data, 0.10, 10);
-        assert!(msg.contains("Daily AWS Cost Digest"));
+        let msg = build_digest_message(&spend_data, "StackAlert", 0.10, 10);
+        assert!(msg.contains("StackAlert: Daily Digest"));
         assert!(msg.contains("Amazon EC2"));
         assert!(msg.contains("Avg daily spend"));
     }
@@ -223,7 +245,7 @@ mod tests {
         let mut spend_data = HashMap::new();
         spend_data.insert("Amazon EC2".to_string(), vec![18.0, 19.0, 17.5]);
         spend_data.insert("AWS Tax".to_string(), vec![0.01, 0.02, 0.01]);
-        let msg = build_digest_message(&spend_data, 0.10, 10);
+        let msg = build_digest_message(&spend_data, "StackAlert", 0.10, 10);
         assert!(msg.contains("Amazon EC2"));
         assert!(!msg.contains("AWS Tax"));
     }
@@ -244,7 +266,7 @@ mod tests {
                 extra_usd: 10.0 - i as f64,
             })
             .collect();
-        let msg = build_spike_message(&spikes, 6, 5);
+        let msg = build_spike_message(&spikes, "StackAlert", 6, 5);
         assert!(msg.contains("...and 2 more services"));
     }
 }

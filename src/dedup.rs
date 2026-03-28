@@ -10,8 +10,8 @@ const SSM_PREFIX: &str = "/stackalert/last-alerted/";
 /// Filter out spikes that were alerted for the same service within the cooldown window.
 ///
 /// `namespace` isolates different accounts:
-///   - self-hosted / single-account mode: `"self"`
-///   - multi-account SaaS mode:           the customer's AWS account ID
+///   - single-account mode: `"self"`
+///   - cross-account mode:  the target AWS account ID (from event payload)
 ///
 /// `cooldown_hours` — how long to suppress repeat alerts (matches `DEDUP_COOLDOWN_HOURS` config).
 ///

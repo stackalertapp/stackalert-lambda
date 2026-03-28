@@ -61,7 +61,8 @@ AWS Budgets fires when you've already overspent. Cost Anomaly Detection needs 2�
 - **New Service Detection**: Flags services that appear for the first time with significant spend (>$1)
 - **Noise Filtering**: Ignores services with <$0.10/day average to reduce alert fatigue
 - **Multi-Channel Notifications**: Send alerts to one or more channels simultaneously — Telegram, Slack, Teams, PagerDuty, email (SES), SNS, or a custom webhook
-- **Cross-Account Support**: Optionally assume an IAM role to monitor a different AWS account
+- **Cross-Account Support**: Optionally assume an IAM role to monitor a different AWS account (via event payload or env var)
+- **Setup Name**: Configurable name shown in all alert messages — identify which account/environment sent the alert
 - **Secure**: Secrets stored in SSM Parameter Store (encrypted)
 - **Fast & Cheap**: Rust on ARM64 (Graviton) — sub-100ms cold start, minimal memory
 
@@ -152,7 +153,9 @@ aws ssm put-parameter \
 |----------|----------|-------------|
 | `NOTIFY_CHANNELS` | No | Comma-separated channel list (default: `telegram`). See [Notification Channels](#notification-channels) |
 | `SPIKE_THRESHOLD_PCT` | No | Spike threshold percentage (default: `50`) |
+| `SETUP_NAME` | No | Human-readable name shown in alerts (default: `StackAlert`) |
 | `CROSS_ACCOUNT_ROLE_ARN` | No | IAM role ARN for cross-account monitoring |
+| `EXTERNAL_ID` | No | ExternalId for confused-deputy protection |
 | `TELEGRAM_BOT_TOKEN_SSM_PARAM` | If using Telegram | SSM parameter name for the bot token |
 | `TELEGRAM_CHAT_ID` | If using Telegram | Telegram chat ID for alerts |
 
@@ -164,6 +167,25 @@ See the [Notification Channels](#notification-channels) table for channel-specif
 - Daily digest: `cron(0 8 * * ? *)` with input `{"mode": "digest"}`
 
 </details>
+
+### Event Payload Overrides
+
+All config can be overridden per-invocation via the event payload. This is useful when an external orchestrator (e.g. Step Functions) invokes the Lambda for multiple accounts with different settings.
+
+```json
+{
+  "mode": "spike",
+  "role_arn": "arn:aws:iam::123456789012:role/StackAlertReadOnly",
+  "external_id": "my-external-id",
+  "account_id": "123456789012",
+  "spike_threshold_pct": 30,
+  "notify_channels": "telegram,slack",
+  "telegram_chat_id": "-100123456789",
+  "setup_name": "Production"
+}
+```
+
+Event values take precedence over environment variables. All fields are optional.
 
 ## Required IAM Permissions
 
@@ -187,7 +209,7 @@ The Lambda execution role needs:
 }
 ```
 
-For cross-account mode, add:
+For cross-account mode (when `CROSS_ACCOUNT_ROLE_ARN` is set or `role_arn` is passed in the event), add:
 
 ```json
 {

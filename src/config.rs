@@ -1,8 +1,6 @@
 use anyhow::{Context, Result};
 use tracing::info;
 
-use crate::accounts::AccountContext;
-
 // ── Per-channel config structs ──────────────────────────────────────────────
 
 #[cfg(feature = "telegram")]
@@ -52,14 +50,22 @@ pub struct Config {
     pub spike_threshold_pct: f64,
 
     /// IAM role ARN to assume for cross-account Cost Explorer access.
-    /// None = single-account mode (Lambda's own credentials).
+    /// None = use Lambda's own credentials.
+    /// Event field `role_arn` → env `CROSS_ACCOUNT_ROLE_ARN`.
     pub cross_account_role_arn: Option<String>,
 
     /// ExternalId for confused-deputy protection when assuming the cross-account role.
+    /// Event field `external_id` → env `EXTERNAL_ID`.
+    #[cfg_attr(not(feature = "cross-account"), allow(dead_code))]
     pub external_id: Option<String>,
 
     /// Namespace for SSM-based alert deduplication keys.
+    /// Event field `account_id` → default `"self"`.
     pub account_namespace: String,
+
+    /// Human-readable name for this setup, shown in alert messages.
+    /// Event field `setup_name` → env `SETUP_NAME` → default `"StackAlert"`.
+    pub setup_name: String,
 
     /// Number of historical days used to compute the baseline average.
     /// Env: `HISTORY_DAYS` (default: 7)
@@ -116,75 +122,57 @@ pub struct Config {
     pub sns: Option<SnsConfig>,
 }
 
+/// Optional per-invocation overrides from the event payload.
+/// Event values take precedence over env vars.
+#[derive(Default)]
+pub struct EventOverrides {
+    pub role_arn: Option<String>,
+    pub external_id: Option<String>,
+    pub account_id: Option<String>,
+    pub spike_threshold_pct: Option<f64>,
+    pub notify_channels: Option<String>,
+    pub telegram_chat_id: Option<String>,
+    pub setup_name: Option<String>,
+}
+
 impl Config {
-    // ── Single-account mode (open-source / self-hosted) ─────────────────
-
-    pub async fn load(base_cfg: &aws_config::SdkConfig) -> Result<Self> {
-        let spike_threshold_pct = std::env::var("SPIKE_THRESHOLD_PCT")
-            .unwrap_or_else(|_| "50".to_string())
-            .parse::<f64>()
-            .context("SPIKE_THRESHOLD_PCT must be a number")?;
-
-        let cross_account_role_arn = std::env::var("CROSS_ACCOUNT_ROLE_ARN").ok();
-        let external_id = std::env::var("EXTERNAL_ID").ok();
-        let notify_channels = Self::parse_notify_channels();
-
-        info!(
-            cross_account = cross_account_role_arn.is_some(),
-            threshold = spike_threshold_pct,
-            channels = ?notify_channels,
-            "Config loaded (single-account mode)"
-        );
-
-        let ssm = aws_sdk_ssm::Client::new(base_cfg);
-
-        let cfg = Config {
-            spike_threshold_pct,
-            cross_account_role_arn,
-            external_id,
-            account_namespace: "self".to_string(),
-            history_days: Self::parse_env_u32("HISTORY_DAYS", 7)?,
-            min_avg_daily_usd: Self::parse_env_f64("MIN_AVG_DAILY_USD", 0.10)?,
-            dedup_cooldown_hours: Self::parse_env_u32("DEDUP_COOLDOWN_HOURS", 6)?,
-            max_spike_display: Self::parse_env_usize("MAX_SPIKE_DISPLAY", 5)?,
-            max_digest_display: Self::parse_env_usize("MAX_DIGEST_DISPLAY", 10)?,
-            http_timeout_secs: Self::parse_http_timeout()?,
-            http_connect_timeout_secs: Self::parse_http_connect_timeout()?,
-
-            #[cfg(feature = "telegram")]
-            telegram: Self::load_telegram_config(&ssm, &notify_channels, None).await?,
-
-            #[cfg(feature = "slack")]
-            slack: Self::load_slack_config(&ssm, &notify_channels).await?,
-
-            #[cfg(feature = "teams")]
-            teams: Self::load_teams_config(&ssm, &notify_channels).await?,
-
-            #[cfg(feature = "pagerduty")]
-            pagerduty: Self::load_pagerduty_config(&ssm, &notify_channels).await?,
-
-            #[cfg(feature = "ses")]
-            ses: Self::load_ses_config(&notify_channels)?,
-
-            #[cfg(feature = "webhook")]
-            webhook: Self::load_webhook_config(&ssm, &notify_channels).await?,
-
-            #[cfg(feature = "sns")]
-            sns: Self::load_sns_config(&notify_channels)?,
-
-            notify_channels,
-        };
-        cfg.validate()?;
-        Ok(cfg)
-    }
-
-    // ── Multi-account mode (StackAlert SaaS / Step Functions) ───────────
-
-    pub async fn from_account_context(
-        ctx: &AccountContext,
+    /// Load configuration from env vars, with optional event-level overrides.
+    ///
+    /// **Self-hosted**: call with `EventOverrides::default()` — all config from env vars.
+    /// **Dashboard SaaS**: Step Functions passes per-account overrides in the event payload.
+    pub async fn load(
         base_cfg: &aws_config::SdkConfig,
+        overrides: &EventOverrides,
     ) -> Result<Self> {
-        let notify_channels = ctx
+        let spike_threshold_pct = overrides.spike_threshold_pct.map_or_else(
+            || {
+                std::env::var("SPIKE_THRESHOLD_PCT")
+                    .unwrap_or_else(|_| "50".to_string())
+                    .parse::<f64>()
+                    .context("SPIKE_THRESHOLD_PCT must be a number")
+            },
+            Ok,
+        )?;
+
+        let cross_account_role_arn = overrides
+            .role_arn
+            .clone()
+            .or_else(|| std::env::var("CROSS_ACCOUNT_ROLE_ARN").ok());
+        let external_id = overrides
+            .external_id
+            .clone()
+            .or_else(|| std::env::var("EXTERNAL_ID").ok());
+        let account_namespace = overrides
+            .account_id
+            .clone()
+            .unwrap_or_else(|| "self".to_string());
+        let setup_name = overrides
+            .setup_name
+            .clone()
+            .or_else(|| std::env::var("SETUP_NAME").ok())
+            .unwrap_or_else(|| "StackAlert".to_string());
+
+        let notify_channels = overrides
             .notify_channels
             .as_deref()
             .map(|s| {
@@ -195,21 +183,25 @@ impl Config {
             })
             .unwrap_or_else(Self::parse_notify_channels);
 
+        let telegram_chat_id_override = overrides.telegram_chat_id.as_deref();
+
         info!(
-            account_id = %ctx.aws_account_id,
-            role_arn   = %ctx.role_arn,
-            threshold  = ctx.spike_threshold,
+            cross_account = cross_account_role_arn.is_some(),
+            %account_namespace,
+            %setup_name,
+            threshold = spike_threshold_pct,
             channels = ?notify_channels,
-            "Config loaded (multi-account context)"
+            "Config loaded"
         );
 
         let ssm = aws_sdk_ssm::Client::new(base_cfg);
 
         let cfg = Config {
-            spike_threshold_pct: ctx.spike_threshold,
-            cross_account_role_arn: Some(ctx.role_arn.clone()),
-            external_id: Some(ctx.external_id.clone()),
-            account_namespace: ctx.aws_account_id.clone(),
+            spike_threshold_pct,
+            cross_account_role_arn,
+            external_id,
+            account_namespace,
+            setup_name,
             history_days: Self::parse_env_u32("HISTORY_DAYS", 7)?,
             min_avg_daily_usd: Self::parse_env_f64("MIN_AVG_DAILY_USD", 0.10)?,
             dedup_cooldown_hours: Self::parse_env_u32("DEDUP_COOLDOWN_HOURS", 6)?,
@@ -219,12 +211,8 @@ impl Config {
             http_connect_timeout_secs: Self::parse_http_connect_timeout()?,
 
             #[cfg(feature = "telegram")]
-            telegram: Self::load_telegram_config(
-                &ssm,
-                &notify_channels,
-                ctx.telegram_chat_id.as_deref(),
-            )
-            .await?,
+            telegram: Self::load_telegram_config(&ssm, &notify_channels, telegram_chat_id_override)
+                .await?,
 
             #[cfg(feature = "slack")]
             slack: Self::load_slack_config(&ssm, &notify_channels).await?,
@@ -299,7 +287,7 @@ impl Config {
             .or_else(|| std::env::var("TELEGRAM_CHAT_ID").ok())
             .filter(|s| !s.is_empty())
             .context(
-                "telegram_chat_id missing from both AccountContext and TELEGRAM_CHAT_ID env var",
+                "telegram_chat_id missing from both event payload and TELEGRAM_CHAT_ID env var",
             )?;
         Ok(Some(TelegramConfig { bot_token, chat_id }))
     }

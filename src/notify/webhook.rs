@@ -33,6 +33,7 @@ impl NotifyChannel for Webhook {
                 .context("Webhook channel active but config missing")?;
             let payload = SpikePayload {
                 event_type: "spike_alert",
+                setup_name: &cfg.setup_name,
                 timestamp: Utc::now().to_rfc3339(),
                 spikes: spikes
                     .iter()
@@ -62,6 +63,7 @@ impl NotifyChannel for Webhook {
                 .context("Webhook channel active but config missing")?;
             let payload = DigestPayload {
                 event_type: "daily_digest",
+                setup_name: cfg.setup_name.clone(),
                 timestamp: Utc::now().to_rfc3339(),
                 services: spend_data
                     .iter()
@@ -90,6 +92,7 @@ impl NotifyChannel for Webhook {
 #[derive(Serialize)]
 struct SpikePayload<'a> {
     event_type: &'a str,
+    setup_name: &'a str,
     timestamp: String,
     spikes: Vec<SpikeEntry<'a>>,
     total_extra_usd: f64,
@@ -107,6 +110,7 @@ struct SpikeEntry<'a> {
 #[derive(Serialize)]
 struct DigestPayload {
     event_type: &'static str,
+    setup_name: String,
     timestamp: String,
     services: Vec<DigestEntry>,
 }
@@ -154,6 +158,7 @@ mod tests {
     fn test_spike_payload_serializes() {
         let payload = SpikePayload {
             event_type: "spike_alert",
+            setup_name: "StackAlert",
             timestamp: "2026-03-27T12:00:00Z".to_string(),
             spikes: vec![SpikeEntry {
                 service: "Amazon EC2",
@@ -174,6 +179,7 @@ mod tests {
     fn test_digest_payload_serializes() {
         let payload = DigestPayload {
             event_type: "daily_digest",
+            setup_name: "StackAlert".to_string(),
             timestamp: "2026-03-27T12:00:00Z".to_string(),
             services: vec![DigestEntry {
                 service: "Amazon EC2".to_string(),

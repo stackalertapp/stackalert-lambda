@@ -4,7 +4,7 @@ use std::pin::Pin;
 use anyhow::{Context, Result};
 use tracing::{info, warn};
 
-use super::{NotifyChannel, fmt_pct, ranked_services, shared_http_client};
+use super::{NotifyChannel, escape_mrkdwn, fmt_pct, ranked_services, shared_http_client};
 use crate::anomaly::Spike;
 use crate::config::Config;
 use crate::cost_explorer::SpendHistory;
@@ -29,7 +29,12 @@ impl NotifyChannel for Slack {
                 .slack
                 .as_ref()
                 .context("Slack channel active but config missing")?;
-            let text = build_spike_message(spikes, cfg.dedup_cooldown_hours, cfg.max_spike_display);
+            let text = build_spike_message(
+                spikes,
+                &cfg.setup_name,
+                cfg.dedup_cooldown_hours,
+                cfg.max_spike_display,
+            );
             send_slack(cfg, &scfg.webhook_url, &text).await
         })
     }
@@ -44,8 +49,12 @@ impl NotifyChannel for Slack {
                 .slack
                 .as_ref()
                 .context("Slack channel active but config missing")?;
-            let text =
-                build_digest_message(spend_data, cfg.min_avg_daily_usd, cfg.max_digest_display);
+            let text = build_digest_message(
+                spend_data,
+                &cfg.setup_name,
+                cfg.min_avg_daily_usd,
+                cfg.max_digest_display,
+            );
             send_slack(cfg, &scfg.webhook_url, &text).await
         })
     }
@@ -72,12 +81,18 @@ async fn send_slack(cfg: &Config, webhook_url: &str, text: &str) -> Result<bool>
 
 // ── Message formatting (Slack mrkdwn) ───────────────────────────────────────
 
-fn build_spike_message(spikes: &[Spike], check_interval_hours: u32, max_display: usize) -> String {
+fn build_spike_message(
+    spikes: &[Spike],
+    setup_name: &str,
+    check_interval_hours: u32,
+    max_display: usize,
+) -> String {
     assert!(!spikes.is_empty(), "build_spike_message called with empty spikes");
     let total_extra: f64 = spikes.iter().map(|s| s.extra_usd).sum();
     let top = &spikes[0];
 
-    let mut msg = String::from(":warning: *AWS Cost Spike Detected*\n\n");
+    let name = escape_mrkdwn(setup_name);
+    let mut msg = format!(":warning: *{name}: Cost Spike Detected*\n\n");
     msg.push_str(&format!(
         ":chart_with_upwards_trend: *{}* spiked {} (${:.2} today vs ${:.2}/day avg)\n",
         top.service,
@@ -109,19 +124,21 @@ fn build_spike_message(spikes: &[Spike], check_interval_hours: u32, max_display:
     }
 
     msg.push_str(&format!(
-        "\n:bell: StackAlert · Checks every {check_interval_hours}h"
+        "\n:bell: {name} · Checks every {check_interval_hours}h"
     ));
     msg
 }
 
 fn build_digest_message(
     spend_data: &SpendHistory,
+    setup_name: &str,
     min_avg_daily: f64,
     max_display: usize,
 ) -> String {
     let (services, grand_total) = ranked_services(spend_data, min_avg_daily);
 
-    let mut msg = String::from(":bar_chart: *Daily AWS Cost Digest*\n\n");
+    let name = escape_mrkdwn(setup_name);
+    let mut msg = format!(":bar_chart: *{name}: Daily Digest*\n\n");
     msg.push_str(&format!(
         ":moneybag: Avg daily spend: *${:.2}*\n\n",
         grand_total
@@ -136,7 +153,7 @@ fn build_digest_message(
             services.len() - max_display
         ));
     }
-    msg.push_str("\n:calendar: StackAlert Daily Digest");
+    msg.push_str(&format!("\n:calendar: {name} Daily Digest"));
     msg
 }
 
@@ -155,8 +172,8 @@ mod tests {
             pct_increase: 316.67,
             extra_usd: 57.0,
         }];
-        let msg = build_spike_message(&spikes, 6, 5);
-        assert!(msg.contains("*AWS Cost Spike Detected*"));
+        let msg = build_spike_message(&spikes, "StackAlert", 6, 5);
+        assert!(msg.contains("*StackAlert: Cost Spike Detected*"));
         assert!(msg.contains("*Amazon EC2*"));
         assert!(msg.contains("+317%"));
         assert!(!msg.contains("<b>"));
@@ -166,8 +183,8 @@ mod tests {
     fn test_digest_message_uses_mrkdwn() {
         let mut data = HashMap::new();
         data.insert("Amazon EC2".to_string(), vec![18.0, 19.0, 17.5]);
-        let msg = build_digest_message(&data, 0.10, 10);
-        assert!(msg.contains("*Daily AWS Cost Digest*"));
+        let msg = build_digest_message(&data, "StackAlert", 0.10, 10);
+        assert!(msg.contains("*StackAlert: Daily Digest*"));
         assert!(!msg.contains("<b>"));
     }
 
@@ -180,7 +197,7 @@ mod tests {
             pct_increase: f64::INFINITY,
             extra_usd: 45.0,
         }];
-        let msg = build_spike_message(&spikes, 6, 5);
+        let msg = build_spike_message(&spikes, "StackAlert", 6, 5);
         assert!(msg.contains("NEW"));
     }
 }

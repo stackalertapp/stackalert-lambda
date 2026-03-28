@@ -40,10 +40,15 @@ impl NotifyChannel for Ses {
                 .as_ref()
                 .context("SES channel active but config missing")?;
             let subject = format!(
-                "AWS Cost Spike: {} (+${:.2})",
-                spikes[0].service, spikes[0].extra_usd
+                "{}: Cost Spike — {} (+${:.2})",
+                cfg.setup_name, spikes[0].service, spikes[0].extra_usd
             );
-            let body = build_spike_html(spikes, cfg.dedup_cooldown_hours, cfg.max_spike_display);
+            let body = build_spike_html(
+                spikes,
+                &cfg.setup_name,
+                cfg.dedup_cooldown_hours,
+                cfg.max_spike_display,
+            );
             send_email(&self.client, scfg, &subject, &body).await
         })
     }
@@ -58,8 +63,19 @@ impl NotifyChannel for Ses {
                 .ses
                 .as_ref()
                 .context("SES channel active but config missing")?;
-            let body = build_digest_html(spend_data, cfg.min_avg_daily_usd, cfg.max_digest_display);
-            send_email(&self.client, scfg, "StackAlert Daily Digest", &body).await
+            let body = build_digest_html(
+                spend_data,
+                &cfg.setup_name,
+                cfg.min_avg_daily_usd,
+                cfg.max_digest_display,
+            );
+            send_email(
+                &self.client,
+                scfg,
+                &format!("{} Daily Digest", cfg.setup_name),
+                &body,
+            )
+            .await
         })
     }
 }
@@ -118,12 +134,17 @@ async fn send_email(
 
 // ── HTML formatting ─────────────────────────────────────────────────────────
 
-fn build_spike_html(spikes: &[Spike], check_interval_hours: u32, max_display: usize) -> String {
+fn build_spike_html(
+    spikes: &[Spike],
+    setup_name: &str,
+    check_interval_hours: u32,
+    max_display: usize,
+) -> String {
     assert!(!spikes.is_empty(), "build_spike_html called with empty spikes");
     let total_extra: f64 = spikes.iter().map(|s| s.extra_usd).sum();
     let top = &spikes[0];
 
-    let mut html = String::from("<h2>AWS Cost Spike Detected</h2>");
+    let mut html = format!("<h2>{}: Cost Spike Detected</h2>", escape_html(setup_name));
     html.push_str(&format!(
         "<p><strong>{}</strong> spiked {} (${:.2} today vs ${:.2}/day avg)</p>",
         escape_html(&top.service),
@@ -153,15 +174,21 @@ fn build_spike_html(spikes: &[Spike], check_interval_hours: u32, max_display: us
     }
 
     html.push_str(&format!(
-        "<hr><p><small>StackAlert &middot; Checks every {check_interval_hours}h</small></p>"
+        "<hr><p><small>{} &middot; Checks every {check_interval_hours}h</small></p>",
+        escape_html(setup_name)
     ));
     html
 }
 
-fn build_digest_html(spend_data: &SpendHistory, min_avg_daily: f64, max_display: usize) -> String {
+fn build_digest_html(
+    spend_data: &SpendHistory,
+    setup_name: &str,
+    min_avg_daily: f64,
+    max_display: usize,
+) -> String {
     let (services, grand_total) = ranked_services(spend_data, min_avg_daily);
 
-    let mut html = String::from("<h2>Daily AWS Cost Digest</h2>");
+    let mut html = format!("<h2>{}: Daily Digest</h2>", escape_html(setup_name));
     html.push_str(&format!(
         "<p>Avg daily spend: <strong>${:.2}</strong></p>",
         grand_total
@@ -184,7 +211,10 @@ fn build_digest_html(spend_data: &SpendHistory, min_avg_daily: f64, max_display:
         ));
     }
 
-    html.push_str("<hr><p><small>StackAlert Daily Digest</small></p>");
+    html.push_str(&format!(
+        "<hr><p><small>{} Daily Digest</small></p>",
+        escape_html(setup_name)
+    ));
     html
 }
 
@@ -203,8 +233,8 @@ mod tests {
             pct_increase: 316.67,
             extra_usd: 57.0,
         }];
-        let html = build_spike_html(&spikes, 6, 5);
-        assert!(html.contains("<h2>AWS Cost Spike Detected</h2>"));
+        let html = build_spike_html(&spikes, "StackAlert", 6, 5);
+        assert!(html.contains("<h2>StackAlert: Cost Spike Detected</h2>"));
         assert!(html.contains("Amazon EC2"));
         assert!(html.contains("+317%"));
     }
@@ -213,8 +243,8 @@ mod tests {
     fn test_digest_html() {
         let mut data = HashMap::new();
         data.insert("Amazon EC2".to_string(), vec![18.0, 19.0]);
-        let html = build_digest_html(&data, 0.10, 10);
-        assert!(html.contains("<h2>Daily AWS Cost Digest</h2>"));
+        let html = build_digest_html(&data, "StackAlert", 0.10, 10);
+        assert!(html.contains("<h2>StackAlert: Daily Digest</h2>"));
         assert!(html.contains("Amazon EC2"));
     }
 }

@@ -29,7 +29,12 @@ impl NotifyChannel for Teams {
                 .teams
                 .as_ref()
                 .context("Teams channel active but config missing")?;
-            let card = build_spike_card(spikes, cfg.dedup_cooldown_hours, cfg.max_spike_display);
+            let card = build_spike_card(
+                spikes,
+                &cfg.setup_name,
+                cfg.dedup_cooldown_hours,
+                cfg.max_spike_display,
+            );
             send_teams(cfg, &tcfg.webhook_url, &card).await
         })
     }
@@ -44,7 +49,12 @@ impl NotifyChannel for Teams {
                 .teams
                 .as_ref()
                 .context("Teams channel active but config missing")?;
-            let card = build_digest_card(spend_data, cfg.min_avg_daily_usd, cfg.max_digest_display);
+            let card = build_digest_card(
+                spend_data,
+                &cfg.setup_name,
+                cfg.min_avg_daily_usd,
+                cfg.max_digest_display,
+            );
             send_teams(cfg, &tcfg.webhook_url, &card).await
         })
     }
@@ -73,6 +83,7 @@ async fn send_teams(cfg: &Config, webhook_url: &str, card: &serde_json::Value) -
 
 fn build_spike_card(
     spikes: &[Spike],
+    setup_name: &str,
     check_interval_hours: u32,
     max_display: usize,
 ) -> serde_json::Value {
@@ -109,13 +120,17 @@ fn build_spike_card(
         ));
     }
     lines.push(String::new());
-    lines.push(format!("StackAlert · Checks every {check_interval_hours}h"));
+    lines.push(format!("{setup_name} · Checks every {check_interval_hours}h"));
 
-    wrap_adaptive_card("AWS Cost Spike Detected", &lines.join("\n\n"))
+    wrap_adaptive_card(
+        &format!("{setup_name}: Cost Spike Detected"),
+        &lines.join("\n\n"),
+    )
 }
 
 fn build_digest_card(
     spend_data: &SpendHistory,
+    setup_name: &str,
     min_avg_daily: f64,
     max_display: usize,
 ) -> serde_json::Value {
@@ -136,9 +151,12 @@ fn build_digest_card(
         ));
     }
     lines.push(String::new());
-    lines.push("StackAlert Daily Digest".to_string());
+    lines.push(format!("{setup_name} Daily Digest"));
 
-    wrap_adaptive_card("Daily AWS Cost Digest", &lines.join("\n\n"))
+    wrap_adaptive_card(
+        &format!("{setup_name}: Daily Digest"),
+        &lines.join("\n\n"),
+    )
 }
 
 fn wrap_adaptive_card(title: &str, body: &str) -> serde_json::Value {
@@ -183,10 +201,10 @@ mod tests {
             pct_increase: 316.67,
             extra_usd: 57.0,
         }];
-        let card = build_spike_card(&spikes, 6, 5);
+        let card = build_spike_card(&spikes, "StackAlert", 6, 5);
         let json = serde_json::to_string(&card).unwrap();
         assert!(json.contains("AdaptiveCard"));
-        assert!(json.contains("AWS Cost Spike Detected"));
+        assert!(json.contains("StackAlert: Cost Spike Detected"));
         assert!(json.contains("Amazon EC2"));
     }
 
@@ -194,9 +212,9 @@ mod tests {
     fn test_digest_card_structure() {
         let mut data = HashMap::new();
         data.insert("Amazon EC2".to_string(), vec![18.0, 19.0]);
-        let card = build_digest_card(&data, 0.10, 10);
+        let card = build_digest_card(&data, "StackAlert", 0.10, 10);
         let json = serde_json::to_string(&card).unwrap();
         assert!(json.contains("AdaptiveCard"));
-        assert!(json.contains("Daily AWS Cost Digest"));
+        assert!(json.contains("StackAlert: Daily Digest"));
     }
 }

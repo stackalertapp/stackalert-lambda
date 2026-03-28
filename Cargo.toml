@@ -13,6 +13,7 @@ path = "src/main.rs"
 
 [features]
 default = ["telegram"]
+cross-account = ["dep:aws-sdk-sts", "dep:aws-credential-types"]
 telegram = []
 slack = []
 teams = []
@@ -30,8 +31,8 @@ lambda_runtime = "1.0"
 aws-config = { version = "1", features = ["behavior-version-latest"] }
 aws-sdk-costexplorer = "1"
 aws-sdk-ssm = "1"
-aws-sdk-sts = "1"
-aws-credential-types = { version = "1", features = ["hardcoded-credentials"] }
+aws-sdk-sts = { version = "1", optional = true }
+aws-credential-types = { version = "1", features = ["hardcoded-credentials"], optional = true }
 aws-sdk-ses = { version = "1", optional = true }
 aws-sdk-sns = { version = "1", optional = true }
 
