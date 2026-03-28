@@ -241,8 +241,15 @@ impl Config {
     // ── Validation ──────────────────────────────────────────────────────
 
     fn validate(&self) -> Result<()> {
-        const KNOWN_CHANNELS: &[&str] =
-            &["telegram", "slack", "teams", "pagerduty", "webhook", "ses", "sns"];
+        const KNOWN_CHANNELS: &[&str] = &[
+            "telegram",
+            "slack",
+            "teams",
+            "pagerduty",
+            "webhook",
+            "ses",
+            "sns",
+        ];
         for ch in &self.notify_channels {
             if !KNOWN_CHANNELS.contains(&ch.as_str()) {
                 return Err(anyhow::anyhow!("Unknown notification channel: {ch:?}"));

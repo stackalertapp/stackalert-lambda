@@ -172,7 +172,9 @@ pub fn build_channels(
             #[cfg(feature = "pagerduty")]
             "pagerduty" => channels.push(Box::new(pagerduty::PagerDuty)),
             #[cfg(not(feature = "pagerduty"))]
-            "pagerduty" => tracing::error!("'pagerduty' requested but compiled without the feature"),
+            "pagerduty" => {
+                tracing::error!("'pagerduty' requested but compiled without the feature")
+            }
 
             #[cfg(feature = "webhook")]
             "webhook" => channels.push(Box::new(webhook::Webhook)),

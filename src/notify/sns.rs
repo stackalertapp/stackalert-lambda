@@ -113,7 +113,10 @@ fn build_spike_text(
     check_interval_hours: u32,
     max_display: usize,
 ) -> String {
-    assert!(!spikes.is_empty(), "build_spike_text called with empty spikes");
+    assert!(
+        !spikes.is_empty(),
+        "build_spike_text called with empty spikes"
+    );
     let total_extra: f64 = spikes.iter().map(|s| s.extra_usd).sum();
     let top = &spikes[0];
 

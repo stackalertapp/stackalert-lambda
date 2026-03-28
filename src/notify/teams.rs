@@ -87,7 +87,10 @@ fn build_spike_card(
     check_interval_hours: u32,
     max_display: usize,
 ) -> serde_json::Value {
-    assert!(!spikes.is_empty(), "build_spike_card called with empty spikes");
+    assert!(
+        !spikes.is_empty(),
+        "build_spike_card called with empty spikes"
+    );
     let total_extra: f64 = spikes.iter().map(|s| s.extra_usd).sum();
     let top = &spikes[0];
 
@@ -120,7 +123,9 @@ fn build_spike_card(
         ));
     }
     lines.push(String::new());
-    lines.push(format!("{setup_name} · Checks every {check_interval_hours}h"));
+    lines.push(format!(
+        "{setup_name} · Checks every {check_interval_hours}h"
+    ));
 
     wrap_adaptive_card(
         &format!("{setup_name}: Cost Spike Detected"),
@@ -153,10 +158,7 @@ fn build_digest_card(
     lines.push(String::new());
     lines.push(format!("{setup_name} Daily Digest"));
 
-    wrap_adaptive_card(
-        &format!("{setup_name}: Daily Digest"),
-        &lines.join("\n\n"),
-    )
+    wrap_adaptive_card(&format!("{setup_name}: Daily Digest"), &lines.join("\n\n"))
 }
 
 fn wrap_adaptive_card(title: &str, body: &str) -> serde_json::Value {

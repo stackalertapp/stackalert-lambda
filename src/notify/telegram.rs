@@ -100,7 +100,10 @@ fn build_spike_message(
     check_interval_hours: u32,
     max_display: usize,
 ) -> String {
-    assert!(!spikes.is_empty(), "build_spike_message called with empty spikes");
+    assert!(
+        !spikes.is_empty(),
+        "build_spike_message called with empty spikes"
+    );
     let total_extra: f64 = spikes.iter().map(|s| s.extra_usd).sum();
     let top_spike = &spikes[0];
 
@@ -150,10 +153,7 @@ fn build_digest_message(
 ) -> String {
     let (services, grand_total) = ranked_services(spend_data, min_avg_daily);
 
-    let mut msg = format!(
-        "📊 <b>{}: Daily Digest</b>\n\n",
-        escape_html(setup_name)
-    );
+    let mut msg = format!("📊 <b>{}: Daily Digest</b>\n\n", escape_html(setup_name));
     msg.push_str(&format!(
         "💰 Avg daily spend: <b>${:.2}</b>\n\n",
         grand_total
@@ -171,10 +171,7 @@ fn build_digest_message(
         ));
     }
 
-    msg.push_str(&format!(
-        "\n📅 {} Daily Digest",
-        escape_html(setup_name)
-    ));
+    msg.push_str(&format!("\n📅 {} Daily Digest", escape_html(setup_name)));
     msg
 }
 
