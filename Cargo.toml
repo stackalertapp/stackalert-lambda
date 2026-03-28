@@ -29,9 +29,9 @@ lambda_runtime = "1.0"
 
 # AWS SDK
 aws-config = { version = "1", features = ["behavior-version-latest"] }
-aws-sdk-costexplorer = "1"
-aws-sdk-ssm = "1"
-aws-sdk-sts = { version = "1", optional = true }
+aws-sdk-costexplorer = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-ssm = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-sts = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"], optional = true }
 aws-credential-types = { version = "1", features = ["hardcoded-credentials"], optional = true }
 aws-sdk-ses = { version = "1", optional = true }
 aws-sdk-sns = { version = "1", optional = true }
