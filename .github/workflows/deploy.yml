@@ -1,0 +1,94 @@
+name: Deploy Lambda
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to deploy (e.g. v1.0.0)"
+        required: true
+        type: string
+      function_name:
+        description: "Lambda function name"
+        required: false
+        default: "stackalert"
+        type: string
+      region:
+        description: "AWS region"
+        required: false
+        default: "eu-central-1"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy ${{ inputs.tag }} → ${{ inputs.function_name }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download release artifact
+        run: |
+          echo "Downloading lambda-arm64.zip from release ${{ inputs.tag }}..."
+          curl -L --fail \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/octet-stream" \
+            "https://api.github.com/repos/${{ github.repository }}/releases/assets/$(
+              curl -s \
+                -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+                "https://api.github.com/repos/${{ github.repository }}/releases/tags/${{ inputs.tag }}" \
+              | jq -r '.assets[] | select(.name == "lambda-arm64.zip") | .id'
+            )" \
+            -o lambda-arm64.zip
+          echo "Downloaded: $(du -sh lambda-arm64.zip)"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ inputs.region }}
+
+      - name: Update Lambda function code
+        run: |
+          echo "Updating ${{ inputs.function_name }} in ${{ inputs.region }}..."
+          aws lambda update-function-code \
+            --function-name "${{ inputs.function_name }}" \
+            --zip-file fileb://lambda-arm64.zip \
+            --architectures arm64 \
+            --no-cli-pager
+
+      - name: Wait for update to complete
+        run: |
+          echo "Waiting for function update to complete..."
+          aws lambda wait function-updated \
+            --function-name "${{ inputs.function_name }}"
+          echo "Done."
+
+      - name: Verify deployment
+        run: |
+          echo "=== Function state after deploy ==="
+          aws lambda get-function-configuration \
+            --function-name "${{ inputs.function_name }}" \
+            --query '{State: State, LastUpdateStatus: LastUpdateStatus, CodeSize: CodeSize, LastModified: LastModified}' \
+            --output table
+
+      - name: Smoke test (spike mode)
+        run: |
+          echo "Running smoke test (spike mode)..."
+          aws lambda invoke \
+            --function-name "${{ inputs.function_name }}" \
+            --payload '{"mode":"spike"}' \
+            --cli-binary-format raw-in-base64-out \
+            --log-type Tail \
+            /tmp/response.json \
+            --query 'LogResult' \
+            --output text | base64 -d | tail -5
+
+          echo "=== Response ==="
+          cat /tmp/response.json
+
+          if jq -e '.errorMessage' /tmp/response.json > /dev/null 2>&1; then
+            echo "Lambda invocation failed!"
+            exit 1
+          fi
+          echo "Smoke test passed."
