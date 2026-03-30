@@ -25,12 +25,14 @@ impl NotifyChannel for Webhook {
     ) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + 'a>> {
         Box::pin(async move {
             if spikes.is_empty() {
+                info!("Webhook: no spikes to send, skipping");
                 return Ok(false);
             }
             let wcfg = cfg
                 .webhook
                 .as_ref()
                 .context("Webhook channel active but config missing")?;
+            info!(spike_count = spikes.len(), "Webhook: sending spike payload");
             let payload = SpikePayload {
                 event_type: "spike_alert",
                 setup_name: &cfg.setup_name,
@@ -61,6 +63,7 @@ impl NotifyChannel for Webhook {
                 .webhook
                 .as_ref()
                 .context("Webhook channel active but config missing")?;
+            info!(services = spend_data.len(), "Webhook: sending digest payload");
             let payload = DigestPayload {
                 event_type: "daily_digest",
                 setup_name: cfg.setup_name.clone(),
@@ -140,12 +143,13 @@ async fn send_webhook<T: Serialize>(
 
     let resp = req.send().await.context("Failed to send webhook")?;
 
-    if resp.status().is_success() {
-        info!("Webhook delivered");
+    let status = resp.status();
+    if status.is_success() {
+        info!("Webhook delivered successfully");
         Ok(true)
     } else {
-        let status = resp.status();
-        warn!(%status, "Webhook returned non-2xx");
+        let body = resp.text().await.unwrap_or_default();
+        warn!(%status, %body, "Webhook returned non-2xx");
         Ok(false)
     }
 }

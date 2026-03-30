@@ -96,6 +96,7 @@ async fn handler(event: LambdaEvent<SchedulerEvent>) -> Result<CheckResponse, Er
     let cfg = config::Config::load(base_cfg, &overrides).await?;
 
     let channels = notify::build_channels(&cfg, base_cfg);
+    info!(channel_count = channels.len(), %mode, "Starting mode execution");
 
     let result = match mode.as_str() {
         "digest" => run_digest(&cfg, base_cfg, &channels).await?,
@@ -188,6 +189,8 @@ async fn run_digest(
     for r in &results {
         if let Some(ref e) = r.error {
             tracing::warn!(channel = r.channel, error = %e, "Channel digest failed");
+        } else {
+            info!(channel = r.channel, sent = r.sent, "Channel digest outcome");
         }
     }
 

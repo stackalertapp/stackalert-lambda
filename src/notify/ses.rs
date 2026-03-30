@@ -33,12 +33,14 @@ impl NotifyChannel for Ses {
     ) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + 'a>> {
         Box::pin(async move {
             if spikes.is_empty() {
+                info!("SES: no spikes to send, skipping");
                 return Ok(false);
             }
             let scfg = cfg
                 .ses
                 .as_ref()
                 .context("SES channel active but config missing")?;
+            info!(spike_count = spikes.len(), "SES: sending spike email");
             let subject = format!(
                 "{}: Cost Spike — {} (+${:.2})",
                 cfg.setup_name, spikes[0].service, spikes[0].extra_usd
@@ -63,6 +65,7 @@ impl NotifyChannel for Ses {
                 .ses
                 .as_ref()
                 .context("SES channel active but config missing")?;
+            info!(services = spend_data.len(), "SES: sending digest email");
             let body = build_digest_html(
                 spend_data,
                 &cfg.setup_name,
@@ -124,8 +127,9 @@ async fn send_email(
         .await;
 
     match result {
-        Ok(_) => {
-            info!("SES email sent");
+        Ok(resp) => {
+            let message_id = resp.message_id();
+            info!(%message_id, "SES email sent successfully");
             Ok(true)
         }
         Err(e) => Err(anyhow::anyhow!("SES send failed: {e}")),

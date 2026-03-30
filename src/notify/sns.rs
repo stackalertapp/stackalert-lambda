@@ -33,12 +33,14 @@ impl NotifyChannel for Sns {
     ) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + 'a>> {
         Box::pin(async move {
             if spikes.is_empty() {
+                info!("SNS: no spikes to send, skipping");
                 return Ok(false);
             }
             let scfg = cfg
                 .sns
                 .as_ref()
                 .context("SNS channel active but config missing")?;
+            info!(spike_count = spikes.len(), topic = %scfg.topic_arn, "SNS: publishing spike alert");
             let text = build_spike_text(
                 spikes,
                 &cfg.setup_name,
@@ -65,6 +67,7 @@ impl NotifyChannel for Sns {
                 .sns
                 .as_ref()
                 .context("SNS channel active but config missing")?;
+            info!(services = spend_data.len(), topic = %scfg.topic_arn, "SNS: publishing digest");
             let text = build_digest_text(
                 spend_data,
                 &cfg.setup_name,
@@ -97,8 +100,9 @@ async fn publish(
         .await;
 
     match result {
-        Ok(_) => {
-            info!("SNS message published");
+        Ok(resp) => {
+            let message_id = resp.message_id().unwrap_or("unknown");
+            info!(%message_id, "SNS message published successfully");
             Ok(true)
         }
         Err(e) => Err(anyhow::anyhow!("SNS publish failed: {e}")),

@@ -25,12 +25,14 @@ impl NotifyChannel for PagerDuty {
     ) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + 'a>> {
         Box::pin(async move {
             if spikes.is_empty() {
+                info!("PagerDuty: no spikes to send, skipping");
                 return Ok(false);
             }
             let pcfg = cfg
                 .pagerduty
                 .as_ref()
                 .context("PagerDuty channel active but config missing")?;
+            info!(spike_count = spikes.len(), severity = %pcfg.severity, "PagerDuty: sending event");
             let summary = build_summary(spikes, &cfg.setup_name, cfg.max_spike_display);
             send_event(cfg, pcfg, &summary).await
         })
@@ -72,12 +74,13 @@ async fn send_event(cfg: &Config, pcfg: &PagerDutyConfig, summary: &str) -> Resu
         .await
         .context("Failed to send PagerDuty event")?;
 
-    if resp.status().is_success() {
+    let status = resp.status();
+    if status.is_success() {
         info!("PagerDuty event triggered");
         Ok(true)
     } else {
-        let status = resp.status();
-        warn!(%status, "PagerDuty API returned non-2xx");
+        let body = resp.text().await.unwrap_or_default();
+        warn!(%status, %body, "PagerDuty API returned non-2xx");
         Ok(false)
     }
 }

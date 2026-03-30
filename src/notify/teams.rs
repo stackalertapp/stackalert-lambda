@@ -23,12 +23,14 @@ impl NotifyChannel for Teams {
     ) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + 'a>> {
         Box::pin(async move {
             if spikes.is_empty() {
+                info!("Teams: no spikes to send, skipping");
                 return Ok(false);
             }
             let tcfg = cfg
                 .teams
                 .as_ref()
                 .context("Teams channel active but config missing")?;
+            info!(spike_count = spikes.len(), "Teams: building spike card");
             let card = build_spike_card(
                 spikes,
                 &cfg.setup_name,
@@ -49,6 +51,7 @@ impl NotifyChannel for Teams {
                 .teams
                 .as_ref()
                 .context("Teams channel active but config missing")?;
+            info!(services = spend_data.len(), "Teams: building digest card");
             let card = build_digest_card(
                 spend_data,
                 &cfg.setup_name,
@@ -69,12 +72,13 @@ async fn send_teams(cfg: &Config, webhook_url: &str, card: &serde_json::Value) -
         .await
         .context("Failed to send Teams webhook")?;
 
-    if resp.status().is_success() {
-        info!("Teams message sent");
+    let status = resp.status();
+    if status.is_success() {
+        info!("Teams message sent successfully");
         Ok(true)
     } else {
-        let status = resp.status();
-        warn!(%status, "Teams webhook returned non-2xx");
+        let body = resp.text().await.unwrap_or_default();
+        warn!(%status, %body, "Teams webhook returned non-2xx");
         Ok(false)
     }
 }

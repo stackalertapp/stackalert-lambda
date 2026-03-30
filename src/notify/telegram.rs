@@ -25,12 +25,14 @@ impl NotifyChannel for Telegram {
     ) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + 'a>> {
         Box::pin(async move {
             if spikes.is_empty() {
+                info!("Telegram: no spikes to send, skipping");
                 return Ok(false);
             }
             let tcfg = cfg
                 .telegram
                 .as_ref()
                 .context("Telegram channel active but config missing")?;
+            info!(spike_count = spikes.len(), "Telegram: building spike message");
             let text = build_spike_message(
                 spikes,
                 &cfg.setup_name,
@@ -51,6 +53,7 @@ impl NotifyChannel for Telegram {
                 .telegram
                 .as_ref()
                 .context("Telegram channel active but config missing")?;
+            info!(services = spend_data.len(), "Telegram: building digest message");
             let text = build_digest_message(
                 spend_data,
                 &cfg.setup_name,
@@ -82,12 +85,13 @@ async fn send_telegram(cfg: &Config, tcfg: &TelegramConfig, text: &str) -> Resul
         .await
         .context("Failed to send Telegram message")?;
 
-    if resp.status().is_success() {
-        info!("Telegram message sent");
+    let status = resp.status();
+    if status.is_success() {
+        info!("Telegram message sent successfully");
         Ok(true)
     } else {
-        let status = resp.status();
-        warn!(%status, "Telegram API returned non-2xx");
+        let body = resp.text().await.unwrap_or_default();
+        warn!(%status, %body, "Telegram API returned non-2xx");
         Ok(false)
     }
 }

@@ -1,3 +1,5 @@
+use tracing::info;
+
 use crate::cost_explorer::{MIN_COST_THRESHOLD, SpendHistory};
 
 /// A detected cost spike for a single AWS service
@@ -100,6 +102,25 @@ pub fn detect_spikes(
     // Sort by extra spend descending (biggest surprise first).
     // total_cmp handles NaN without panicking (NaN sorts last).
     spikes.sort_by(|a, b| b.extra_usd.total_cmp(&a.extra_usd));
+
+    info!(
+        services_checked = history.len(),
+        spikes_detected = spikes.len(),
+        threshold_pct,
+        min_avg_daily,
+        "Spike detection complete"
+    );
+    for spike in &spikes {
+        info!(
+            service = %spike.service,
+            avg_daily = spike.avg_daily,
+            today = spike.today,
+            pct_increase = spike.pct_increase,
+            extra_usd = spike.extra_usd,
+            "Spike detected"
+        );
+    }
+
     spikes
 }
 

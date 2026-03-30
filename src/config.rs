@@ -235,6 +235,15 @@ impl Config {
             notify_channels,
         };
         cfg.validate()?;
+        info!(
+            history_days = cfg.history_days,
+            min_avg_daily_usd = cfg.min_avg_daily_usd,
+            dedup_cooldown_hours = cfg.dedup_cooldown_hours,
+            http_timeout_secs = cfg.http_timeout_secs,
+            max_spike_display = cfg.max_spike_display,
+            max_digest_display = cfg.max_digest_display,
+            "Config validated"
+        );
         Ok(cfg)
     }
 
@@ -425,6 +434,8 @@ impl Config {
         let ssm_param =
             std::env::var(env_key).with_context(|| format!("{env_key} env var not set"))?;
 
+        info!(env_key, ssm_param = %ssm_param, "Loading SSM parameter");
+
         let resp = ssm
             .get_parameter()
             .name(&ssm_param)
@@ -433,9 +444,13 @@ impl Config {
             .await
             .with_context(|| format!("Failed to fetch SSM parameter: {ssm_param}"))?;
 
-        resp.parameter
+        let value = resp
+            .parameter
             .and_then(|p| p.value)
-            .context("SSM parameter has no value")
+            .context("SSM parameter has no value")?;
+
+        info!(env_key, ssm_param = %ssm_param, value_len = value.len(), "SSM parameter loaded");
+        Ok(value)
     }
 
     /// Load an optional SSM parameter. Returns Ok(None) if the env var is unset.

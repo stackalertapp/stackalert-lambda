@@ -197,6 +197,9 @@ pub fn build_channels(
 
     if channels.is_empty() {
         tracing::warn!("No notification channels configured");
+    } else {
+        let names: Vec<&str> = channels.iter().map(|ch| ch.name()).collect();
+        tracing::info!(?names, count = channels.len(), "Notification channels built");
     }
 
     channels
@@ -210,17 +213,22 @@ pub async fn fan_out_spike_alert(
     cfg: &Config,
     spikes: &[Spike],
 ) -> Vec<ChannelResult> {
+    tracing::info!(spike_count = spikes.len(), "Fan-out spike alert to {} channels", channels.len());
     let futures: Vec<_> = channels
         .iter()
         .map(|ch| {
             let name = ch.name();
             async move {
+                tracing::info!(channel = name, "Sending spike alert");
                 match ch.send_spike_alert(cfg, spikes).await {
-                    Ok(sent) => ChannelResult {
-                        channel: name,
-                        sent,
-                        error: None,
-                    },
+                    Ok(sent) => {
+                        tracing::info!(channel = name, sent, "Spike alert result");
+                        ChannelResult {
+                            channel: name,
+                            sent,
+                            error: None,
+                        }
+                    }
                     Err(e) => {
                         tracing::warn!(channel = name, error = %e, "Channel send failed");
                         ChannelResult {
@@ -243,17 +251,22 @@ pub async fn fan_out_daily_digest(
     cfg: &Config,
     spend_data: &SpendHistory,
 ) -> Vec<ChannelResult> {
+    tracing::info!(services = spend_data.len(), "Fan-out daily digest to {} channels", channels.len());
     let futures: Vec<_> = channels
         .iter()
         .map(|ch| {
             let name = ch.name();
             async move {
+                tracing::info!(channel = name, "Sending daily digest");
                 match ch.send_daily_digest(cfg, spend_data).await {
-                    Ok(sent) => ChannelResult {
-                        channel: name,
-                        sent,
-                        error: None,
-                    },
+                    Ok(sent) => {
+                        tracing::info!(channel = name, sent, "Digest result");
+                        ChannelResult {
+                            channel: name,
+                            sent,
+                            error: None,
+                        }
+                    }
                     Err(e) => {
                         tracing::warn!(channel = name, error = %e, "Channel digest failed");
                         ChannelResult {

@@ -5,7 +5,7 @@ use aws_sdk_costexplorer::types::{
 };
 use chrono::{Duration, NaiveDate, Utc};
 use std::collections::HashMap;
-use tracing::{debug, info};
+use tracing::info;
 
 use crate::config::Config;
 
@@ -126,7 +126,7 @@ pub async fn fetch_spend(cfg: &SdkConfig, days: i64) -> Result<SpendHistory> {
     let start_str = start.format("%Y-%m-%d").to_string();
     let end_str = today.format("%Y-%m-%d").to_string();
 
-    debug!(start = %start_str, end = %end_str, "Querying Cost Explorer");
+    info!(start = %start_str, end = %end_str, days, "Querying Cost Explorer");
 
     let resp = ce
         .get_cost_and_usage()
@@ -210,7 +210,7 @@ pub async fn fetch_spend(cfg: &SdkConfig, days: i64) -> Result<SpendHistory> {
         }
     }
 
-    debug!(
+    info!(
         services = history.len(),
         days = num_days,
         "Spend data fetched"

@@ -23,12 +23,14 @@ impl NotifyChannel for Slack {
     ) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + 'a>> {
         Box::pin(async move {
             if spikes.is_empty() {
+                info!("Slack: no spikes to send, skipping");
                 return Ok(false);
             }
             let scfg = cfg
                 .slack
                 .as_ref()
                 .context("Slack channel active but config missing")?;
+            info!(spike_count = spikes.len(), "Slack: building spike message");
             let text = build_spike_message(
                 spikes,
                 &cfg.setup_name,
@@ -49,6 +51,7 @@ impl NotifyChannel for Slack {
                 .slack
                 .as_ref()
                 .context("Slack channel active but config missing")?;
+            info!(services = spend_data.len(), "Slack: building digest message");
             let text = build_digest_message(
                 spend_data,
                 &cfg.setup_name,
@@ -69,12 +72,13 @@ async fn send_slack(cfg: &Config, webhook_url: &str, text: &str) -> Result<bool>
         .await
         .context("Failed to send Slack webhook")?;
 
-    if resp.status().is_success() {
+    let status = resp.status();
+    if status.is_success() {
         info!("Slack message sent");
         Ok(true)
     } else {
-        let status = resp.status();
-        warn!(%status, "Slack webhook returned non-2xx");
+        let body = resp.text().await.unwrap_or_default();
+        warn!(%status, %body, "Slack webhook returned non-2xx");
         Ok(false)
     }
 }
