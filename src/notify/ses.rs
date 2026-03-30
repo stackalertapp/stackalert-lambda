@@ -193,29 +193,42 @@ fn build_digest_html(
     min_avg_daily: f64,
     max_display: usize,
 ) -> String {
-    let (services, grand_total) = ranked_services(spend_data, min_avg_daily);
+    let ranked = ranked_services(spend_data, min_avg_daily);
 
     let mut html = format!("<h2>{}: Daily Digest</h2>", escape_html(setup_name));
     html.push_str(&format!(
         "<p>Avg daily spend: <strong>${:.2}</strong></p>",
-        grand_total
+        ranked.grand_total
     ));
 
-    html.push_str("<h3>Top services (avg/day)</h3><ul>");
-    for (service, avg) in services.iter().take(max_display) {
+    if ranked.services.is_empty() {
         html.push_str(&format!(
-            "<li>{} &mdash; ${:.2}/day</li>",
-            escape_html(service),
-            avg
+            "<p><em>No services above ${:.2}/day noise floor ({} services filtered out)</em></p>",
+            min_avg_daily, ranked.filtered_out
         ));
-    }
-    html.push_str("</ul>");
+    } else {
+        html.push_str("<h3>Top services (avg/day)</h3><ul>");
+        for (service, avg) in ranked.services.iter().take(max_display) {
+            html.push_str(&format!(
+                "<li>{} &mdash; ${:.2}/day</li>",
+                escape_html(service),
+                avg
+            ));
+        }
+        html.push_str("</ul>");
 
-    if services.len() > max_display {
-        html.push_str(&format!(
-            "<p><em>...and {} more services</em></p>",
-            services.len() - max_display
-        ));
+        if ranked.services.len() > max_display {
+            html.push_str(&format!(
+                "<p><em>...and {} more services</em></p>",
+                ranked.services.len() - max_display
+            ));
+        }
+        if ranked.filtered_out > 0 {
+            html.push_str(&format!(
+                "<p><em>({} services below ${:.2}/day hidden)</em></p>",
+                ranked.filtered_out, min_avg_daily
+            ));
+        }
     }
 
     html.push_str(&format!(

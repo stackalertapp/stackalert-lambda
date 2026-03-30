@@ -71,11 +71,18 @@ pub(crate) fn escape_mrkdwn(s: &str) -> String {
 }
 
 /// Compute sorted (descending by avg) services above the noise floor, plus grand total.
-pub(crate) fn ranked_services(
-    spend_data: &SpendHistory,
-    min_avg_daily: f64,
-) -> (Vec<(String, f64)>, f64) {
-    let mut services: Vec<(String, f64)> = spend_data
+/// Outcome of ranking services by avg daily spend.
+pub(crate) struct RankedServices {
+    /// Services above the noise floor, sorted descending by avg daily spend.
+    pub services: Vec<(String, f64)>,
+    /// Grand total avg daily spend across **all** services (not just filtered ones).
+    pub grand_total: f64,
+    /// How many services were below the noise floor and excluded from the list.
+    pub filtered_out: usize,
+}
+
+pub(crate) fn ranked_services(spend_data: &SpendHistory, min_avg_daily: f64) -> RankedServices {
+    let all: Vec<(String, f64)> = spend_data
         .iter()
         .map(|(service, costs)| {
             let total: f64 = costs.iter().sum();
@@ -86,11 +93,22 @@ pub(crate) fn ranked_services(
             };
             (service.clone(), avg)
         })
+        .collect();
+
+    let grand_total: f64 = all.iter().map(|(_, avg)| avg).sum();
+
+    let mut services: Vec<(String, f64)> = all
+        .into_iter()
         .filter(|(_, avg)| *avg >= min_avg_daily)
         .collect();
     services.sort_by(|a, b| b.1.total_cmp(&a.1));
-    let grand_total = services.iter().map(|(_, avg)| avg).sum();
-    (services, grand_total)
+
+    let filtered_out = spend_data.len() - services.len();
+    RankedServices {
+        services,
+        grand_total,
+        filtered_out,
+    }
 }
 
 // ── Trait ────────────────────────────────────────────────────────────────────

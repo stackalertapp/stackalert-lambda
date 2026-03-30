@@ -143,22 +143,37 @@ fn build_digest_card(
     min_avg_daily: f64,
     max_display: usize,
 ) -> serde_json::Value {
-    let (services, grand_total) = ranked_services(spend_data, min_avg_daily);
+    let ranked = ranked_services(spend_data, min_avg_daily);
 
     let mut lines = vec![
-        format!("Avg daily spend: **${:.2}**", grand_total),
+        format!("Avg daily spend: **${:.2}**", ranked.grand_total),
         String::new(),
-        "**Top services (avg/day):**".to_string(),
     ];
-    for (service, avg) in services.iter().take(max_display) {
-        lines.push(format!("- {} — ${:.2}/day", service, avg));
-    }
-    if services.len() > max_display {
+
+    if ranked.services.is_empty() {
         lines.push(format!(
-            "_...and {} more services_",
-            services.len() - max_display
+            "_No services above ${:.2}/day noise floor ({} services filtered out)_",
+            min_avg_daily, ranked.filtered_out
         ));
+    } else {
+        lines.push("**Top services (avg/day):**".to_string());
+        for (service, avg) in ranked.services.iter().take(max_display) {
+            lines.push(format!("- {} — ${:.2}/day", service, avg));
+        }
+        if ranked.services.len() > max_display {
+            lines.push(format!(
+                "_...and {} more services_",
+                ranked.services.len() - max_display
+            ));
+        }
+        if ranked.filtered_out > 0 {
+            lines.push(format!(
+                "_({} services below ${:.2}/day hidden)_",
+                ranked.filtered_out, min_avg_daily
+            ));
+        }
     }
+
     lines.push(String::new());
     lines.push(format!("{setup_name} Daily Digest"));
 

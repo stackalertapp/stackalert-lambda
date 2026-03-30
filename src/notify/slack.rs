@@ -145,24 +145,39 @@ fn build_digest_message(
     min_avg_daily: f64,
     max_display: usize,
 ) -> String {
-    let (services, grand_total) = ranked_services(spend_data, min_avg_daily);
+    let ranked = ranked_services(spend_data, min_avg_daily);
 
     let name = escape_mrkdwn(setup_name);
     let mut msg = format!(":bar_chart: *{name}: Daily Digest*\n\n");
     msg.push_str(&format!(
         ":moneybag: Avg daily spend: *${:.2}*\n\n",
-        grand_total
+        ranked.grand_total
     ));
-    msg.push_str("*Top services (avg/day):*\n");
-    for (service, avg) in services.iter().take(max_display) {
-        msg.push_str(&format!("• {} — ${:.2}/day\n", service, avg));
-    }
-    if services.len() > max_display {
+
+    if ranked.services.is_empty() {
         msg.push_str(&format!(
-            "_...and {} more services_\n",
-            services.len() - max_display
+            "_No services above ${:.2}/day noise floor ({} services filtered out)_\n",
+            min_avg_daily, ranked.filtered_out
         ));
+    } else {
+        msg.push_str("*Top services (avg/day):*\n");
+        for (service, avg) in ranked.services.iter().take(max_display) {
+            msg.push_str(&format!("• {} — ${:.2}/day\n", service, avg));
+        }
+        if ranked.services.len() > max_display {
+            msg.push_str(&format!(
+                "_...and {} more services_\n",
+                ranked.services.len() - max_display
+            ));
+        }
+        if ranked.filtered_out > 0 {
+            msg.push_str(&format!(
+                "_({} services below ${:.2}/day hidden)_\n",
+                ranked.filtered_out, min_avg_daily
+            ));
+        }
     }
+
     msg.push_str(&format!("\n:calendar: {name} Daily Digest"));
     msg
 }
