@@ -199,7 +199,11 @@ pub fn build_channels(
         tracing::warn!("No notification channels configured");
     } else {
         let names: Vec<&str> = channels.iter().map(|ch| ch.name()).collect();
-        tracing::info!(?names, count = channels.len(), "Notification channels built");
+        tracing::info!(
+            ?names,
+            count = channels.len(),
+            "Notification channels built"
+        );
     }
 
     channels
@@ -213,7 +217,11 @@ pub async fn fan_out_spike_alert(
     cfg: &Config,
     spikes: &[Spike],
 ) -> Vec<ChannelResult> {
-    tracing::info!(spike_count = spikes.len(), "Fan-out spike alert to {} channels", channels.len());
+    tracing::info!(
+        spike_count = spikes.len(),
+        "Fan-out spike alert to {} channels",
+        channels.len()
+    );
     let futures: Vec<_> = channels
         .iter()
         .map(|ch| {
@@ -251,7 +259,11 @@ pub async fn fan_out_daily_digest(
     cfg: &Config,
     spend_data: &SpendHistory,
 ) -> Vec<ChannelResult> {
-    tracing::info!(services = spend_data.len(), "Fan-out daily digest to {} channels", channels.len());
+    tracing::info!(
+        services = spend_data.len(),
+        "Fan-out daily digest to {} channels",
+        channels.len()
+    );
     let futures: Vec<_> = channels
         .iter()
         .map(|ch| {

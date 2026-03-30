@@ -32,7 +32,10 @@ impl NotifyChannel for Telegram {
                 .telegram
                 .as_ref()
                 .context("Telegram channel active but config missing")?;
-            info!(spike_count = spikes.len(), "Telegram: building spike message");
+            info!(
+                spike_count = spikes.len(),
+                "Telegram: building spike message"
+            );
             let text = build_spike_message(
                 spikes,
                 &cfg.setup_name,
@@ -53,7 +56,10 @@ impl NotifyChannel for Telegram {
                 .telegram
                 .as_ref()
                 .context("Telegram channel active but config missing")?;
-            info!(services = spend_data.len(), "Telegram: building digest message");
+            info!(
+                services = spend_data.len(),
+                "Telegram: building digest message"
+            );
             let text = build_digest_message(
                 spend_data,
                 &cfg.setup_name,

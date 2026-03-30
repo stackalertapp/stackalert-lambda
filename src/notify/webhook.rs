@@ -63,7 +63,10 @@ impl NotifyChannel for Webhook {
                 .webhook
                 .as_ref()
                 .context("Webhook channel active but config missing")?;
-            info!(services = spend_data.len(), "Webhook: sending digest payload");
+            info!(
+                services = spend_data.len(),
+                "Webhook: sending digest payload"
+            );
             let payload = DigestPayload {
                 event_type: "daily_digest",
                 setup_name: cfg.setup_name.clone(),

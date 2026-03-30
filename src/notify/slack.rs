@@ -51,7 +51,10 @@ impl NotifyChannel for Slack {
                 .slack
                 .as_ref()
                 .context("Slack channel active but config missing")?;
-            info!(services = spend_data.len(), "Slack: building digest message");
+            info!(
+                services = spend_data.len(),
+                "Slack: building digest message"
+            );
             let text = build_digest_message(
                 spend_data,
                 &cfg.setup_name,
